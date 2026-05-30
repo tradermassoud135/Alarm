@@ -229,9 +229,9 @@ def _sb_delete_alert(aid):
     try:
         r = requests.delete(
             f"{SUPABASE_URL}/rest/v1/alerts?id=eq.{aid}",
-            headers=_sb_h(), timeout=8)
-        if r.status_code not in (200,204):
-            print(f"[alerts] delete {aid}: {r.status_code}")
+            headers={**_sb_h(), "Prefer": "return=minimal"},
+            timeout=8)
+        print(f"[alerts] delete {aid}: status={r.status_code} body={r.text[:80]}")
     except Exception as e:
         print(f"[alerts] delete error: {e}")
 
