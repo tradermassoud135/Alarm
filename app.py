@@ -1007,7 +1007,7 @@ def poll_telegram():
                         out_msg = (
                             f"🚨 <b>آلارم فوری!</b>\n\n"
                             f"💰 <b>{sym}</b> — {arrow}\n"
-                            f"👤 ارسال‌کننده: <b>{sender_name}</b>  {hashtag}\n\n"
+                            f"👤 {hashtag}\n\n"
                             f"📊 قیمت لحظه‌ای: <b>{price_text}</b>"
                             f"{cmt}\n\n⏰ {now_pretty()} (تهران)"
                         )
@@ -1296,7 +1296,7 @@ def check_alerts():
                         fired_msg = (
                             f"🚨 <b>آلارم قیمت!</b>\n\n"
                             f"💰 <b>{sym}</b> — {arrow}\n"
-                            f"👤 ارسال‌کننده: <b>{creator}</b>  {hashtag}\n\n"
+                            f"👤 {hashtag}\n\n"
                             f"🎯 هدف: <code>{fmt_price(tgt,sym)}</code>\n"
                             f"📊 قیمت لحظه‌ای: <b>{fmt_price(cur,sym)}</b>\n"
                             f"📏 فاصله: <b>{dist}</b>"
@@ -1795,7 +1795,7 @@ def instant_alert():
     out_msg = (
         f"🚨 <b>{'آلارم قیمت' if target_price else 'آلارم فوری'}!</b>\n\n"
         f"💰 <b>{sym}</b> — {arrow}\n"
-        f"👤 ارسال‌کننده: <b>{_creator}</b>  {hashtag}\n\n"
+        f"👤 {hashtag}\n\n"
         + (f"🎯 هدف: <code>{fmt_price(target_price, sym)}</code>\n" if target_price else "")
         + f"📊 قیمت لحظه‌ای: <b>{price_text}</b>"
         f"{cmt}\n\n⏰ {now_pretty()} (تهران)"
