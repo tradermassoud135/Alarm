@@ -388,6 +388,117 @@ def send_tg(token, chat_id, text):
 def broadcast(token, chat_ids, text):
     return [send_tg(token, c, text) for c in chat_ids]
 
+def send_tg_keyboard(token, chat_id, text, keyboard):
+    """ارسال پیام با inline keyboard"""
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": str(chat_id), "text": text,
+                  "parse_mode": "HTML", "reply_markup": {"inline_keyboard": keyboard}},
+            timeout=10, headers=H)
+        return r.json().get("result", {}).get("message_id")
+    except: return None
+
+def edit_tg_keyboard(token, chat_id, message_id, text, keyboard):
+    """ویرایش پیام با inline keyboard"""
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{token}/editMessageText",
+            json={"chat_id": str(chat_id), "message_id": message_id,
+                  "text": text, "parse_mode": "HTML",
+                  "reply_markup": {"inline_keyboard": keyboard}},
+            timeout=10, headers=H)
+    except: pass
+
+def answer_callback(token, callback_id, text=""):
+    """جواب به callback query"""
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{token}/answerCallbackQuery",
+            json={"callback_query_id": callback_id, "text": text},
+            timeout=10, headers=H)
+    except: pass
+
+# ── reminder state ─────────────────────────────────────────────
+# { cid: { "sym": str, "interval": int(sec), "timer": Timer } }
+# _reminders = { cid: { sym: {"interval": int, "active": bool} } }
+_reminders = {}
+
+def _delete_msg_after(token, cid, msg_id, delay=120):
+    """پیام رو بعد از delay ثانیه پاک کن"""
+    def _do():
+        time.sleep(delay)
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{token}/deleteMessage",
+                json={"chat_id": cid, "message_id": msg_id},
+                timeout=10, headers=H)
+        except: pass
+    threading.Thread(target=_do, daemon=True).start()
+
+def _send_reminder(token, cid, sym):
+    """یه پیام یادآوری بفرست با دکمه کنسل"""
+    msg = f"⚠️ <b>یادآوری:</b> <code>{sym}</code> بررسی بشه!\n\n🕐 این پیام ۲ دقیقه دیگه پاک میشه."
+    kb = [[{"text": f"✕ کنسل {sym}", "callback_data": f"cancel_reminder_one:{cid}:{sym}"}]]
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": cid, "text": msg, "parse_mode": "HTML",
+                  "reply_markup": {"inline_keyboard": kb}},
+            timeout=10, headers=H)
+        mid = r.json().get("result", {}).get("message_id")
+        if mid:
+            _delete_msg_after(token, cid, mid, delay=120)
+    except: pass
+
+def _schedule_reminder(token, cid, sym, interval_sec):
+    """هر interval_sec یه یادآوری بفرست تا کنسل نشه"""
+    if cid not in _reminders:
+        _reminders[cid] = {}
+    _reminders[cid][sym] = {"interval": interval_sec, "active": True}
+    entry = _reminders[cid][sym]
+    def _loop():
+        while entry.get("active") and _reminders.get(cid, {}).get(sym, {}).get("active"):
+            time.sleep(interval_sec)
+            if not _reminders.get(cid, {}).get(sym, {}).get("active"):
+                break
+            _send_reminder(token, cid, sym)
+    threading.Thread(target=_loop, daemon=True).start()
+
+def build_cancel_reminder_msg(cid):
+    """لیست هشدارهای فعال با دکمه حذف جداگانه"""
+    active = _reminders.get(cid, {})
+    if not active:
+        return "هیچ هشدار دوره‌ای فعالی نداری.", []
+    labels = {300:"۵ دقیقه", 900:"۱۵ دقیقه", 3600:"۱ ساعت", 14400:"۴ ساعت"}
+    lines = ["⏰ <b>هشدارهای دوره‌ای فعال:</b>\n"]
+    keyboard = []
+    for sym, info in active.items():
+        lbl = labels.get(info["interval"], f"{info['interval']//60} دقیقه")
+        lines.append(f"• <b>{sym}</b> — هر {lbl}")
+        keyboard.append([{"text": f"🗑 حذف {sym}", "callback_data": f"cancel_reminder_one:{cid}:{sym}"}])
+    keyboard.append([{"text": "✕ کنسل همه", "callback_data": f"cancel_reminder_all:{cid}"}])
+    keyboard.append([{"text": "✓ بستن", "callback_data": "close_myalerts"}])
+    return "\n".join(lines), keyboard
+
+def build_myalerts_msg(cid):
+    """متن و keyboard لیست آلارم‌های شخصی"""
+    alerts = load_alerts().get("alerts", [])
+    my = [a for a in alerts if a.get("is_private") and str(a.get("private_cid","")) == cid and a.get("active")]
+    if not my:
+        return "📭 هیچ آلارم شخصی فعالی نداری.", []
+    lines = ["🔒 <b>آلارم‌های شخصی تو:</b>\n"]
+    keyboard = []
+    for i, a in enumerate(my, 1):
+        sym = a.get("symbol","")
+        tgt = a.get("target_price",0)
+        cond = "📈 بای" if a.get("condition") == "below" else "📉 سل"
+        cmt = f" — {a['comment']}" if a.get("comment") else ""
+        lines.append(f"{i}. <b>{sym}</b> {cond} @ <code>{tgt}</code>{cmt}")
+        keyboard.append([{"text": f"🗑 حذف {sym} @ {tgt}", "callback_data": f"del_alert:{a['id']}"}])
+    keyboard.append([{"text": "✕ بستن", "callback_data": "close_myalerts"}])
+    return "\n".join(lines), keyboard
+
 def _get_token_and_cids():
     data = load_alerts()
     tg = data.get("telegram", {})
@@ -514,9 +625,17 @@ def daily_news_scheduler():
             print(f"[news_scheduler] {e}")
         time.sleep(50)
 
+_pending_name = {}   # cid → True  (منتظر دریافت اسم custom)
+
 def _get_sender_name(msg):
-    """اسم فرستنده رو از آبجکت message تلگرام میگیره"""
+    """اسم فرستنده — اول custom_name، بعد اسم تلگرام"""
     u = msg.get("from", {})
+    cid = str(msg.get("chat", {}).get("id", "") or u.get("id", ""))
+    if cid:
+        users = load_alerts().get("users", [])
+        for usr in users:
+            if str(usr.get("chat_id", "")) == cid and usr.get("custom_name"):
+                return usr["custom_name"]
     fn = u.get("first_name", "")
     ln = u.get("last_name", "")
     un = u.get("username", "")
@@ -539,6 +658,107 @@ def poll_telegram():
                 continue
             for upd in r.json().get("result", []):
                 last_id = upd["update_id"]
+
+                # ── callback query (دکمه‌های inline) ─────────────────
+                cbq = upd.get("callback_query", {})
+                if cbq:
+                    cbq_id = cbq.get("id","")
+                    cbq_data = cbq.get("data","")
+                    cbq_cid = str(cbq.get("from",{}).get("id","") or cbq.get("message",{}).get("chat",{}).get("id",""))
+                    cbq_msg_id = cbq.get("message",{}).get("message_id")
+                    token_cbq, _, _ = _get_token_and_cids()
+
+                    if cbq_data.startswith("del_alert:"):
+                        aid = cbq_data.split(":",1)[1]
+                        d = load_alerts()
+                        before = len(d["alerts"])
+                        d["alerts"] = [a for a in d["alerts"] if a["id"] != aid]
+                        if len(d["alerts"]) < before:
+                            save_alerts(d)
+                            answer_callback(token_cbq, cbq_id, "✅ آلارم حذف شد")
+                        else:
+                            answer_callback(token_cbq, cbq_id, "⚠️ آلارم پیدا نشد")
+                        # آپدیت لیست
+                        new_text, new_kb = build_myalerts_msg(cbq_cid)
+                        if new_kb:
+                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, new_text, new_kb)
+                        else:
+                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, "✅ همه آلارم‌های شخصی حذف شدن.", [])
+
+                    elif cbq_data.startswith("set_reminder:"):
+                        # set_reminder:cid:SYM — نشون بده ۴ گزینه بازه زمانی
+                        parts = cbq_data.split(":", 2)
+                        r_cid = parts[1] if len(parts) > 1 else cbq_cid
+                        r_sym = parts[2] if len(parts) > 2 else "؟"
+                        answer_callback(token_cbq, cbq_id)
+                        kb = [
+                            [{"text": "⏱ ۵ دقیقه",  "callback_data": f"reminder_go:{r_cid}:{r_sym}:300"}],
+                            [{"text": "⏱ ۱۵ دقیقه", "callback_data": f"reminder_go:{r_cid}:{r_sym}:900"}],
+                            [{"text": "⏱ ۱ ساعت",   "callback_data": f"reminder_go:{r_cid}:{r_sym}:3600"}],
+                            [{"text": "⏱ ۴ ساعت",   "callback_data": f"reminder_go:{r_cid}:{r_sym}:14400"}],
+                            [{"text": "✕ نه ممنون",  "callback_data": "close_myalerts"}],
+                        ]
+                        edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                            f"⏰ هر چند وقت یادآوری بیاد برای <b>{r_sym}</b>؟", kb)
+
+                    elif cbq_data.startswith("reminder_go:"):
+                        # reminder_go:cid:SYM:interval_sec
+                        parts = cbq_data.split(":")
+                        r_cid = parts[1] if len(parts) > 1 else cbq_cid
+                        r_sym = parts[2] if len(parts) > 2 else "؟"
+                        r_int = int(parts[3]) if len(parts) > 3 else 900
+                        labels = {300:"۵ دقیقه", 900:"۱۵ دقیقه", 3600:"۱ ساعت", 14400:"۴ ساعت"}
+                        label = labels.get(r_int, f"{r_int//60} دقیقه")
+                        # کنسل قبلی برای همین نماد اگه بود
+                        if _reminders.get(r_cid, {}).get(r_sym):
+                            _reminders[r_cid][r_sym]["active"] = False
+                            del _reminders[r_cid][r_sym]
+                        answer_callback(token_cbq, cbq_id, f"✅ هر {label} یادآوری میاد")
+                        edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                            f"✅ هشدار دوره‌ای <b>{r_sym}</b> هر <b>{label}</b> فعال شد.\nبرای کنسل: /cancel_reminder", [])
+                        _schedule_reminder(token_cbq, r_cid, r_sym, r_int)
+
+                    elif cbq_data.startswith("cancel_reminder_one:"):
+                        # حذف یه هشدار مشخص
+                        parts = cbq_data.split(":", 2)
+                        r_cid = parts[1] if len(parts) > 1 else cbq_cid
+                        r_sym = parts[2] if len(parts) > 2 else ""
+                        if r_sym and _reminders.get(r_cid, {}).get(r_sym):
+                            _reminders[r_cid][r_sym]["active"] = False
+                            del _reminders[r_cid][r_sym]
+                            if not _reminders[r_cid]:
+                                del _reminders[r_cid]
+                            answer_callback(token_cbq, cbq_id, f"✅ هشدار {r_sym} کنسل شد")
+                        else:
+                            answer_callback(token_cbq, cbq_id, "هشداری پیدا نشد")
+                        # آپدیت لیست
+                        new_text, new_kb = build_cancel_reminder_msg(r_cid)
+                        if new_kb:
+                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, new_text, new_kb)
+                        else:
+                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, "✅ همه هشدارها کنسل شدن.", [])
+
+                    elif cbq_data.startswith("cancel_reminder_all:"):
+                        r_cid = cbq_data.split(":", 1)[1] if ":" in cbq_data else cbq_cid
+                        if r_cid in _reminders:
+                            for info in _reminders[r_cid].values():
+                                info["active"] = False
+                            del _reminders[r_cid]
+                            answer_callback(token_cbq, cbq_id, "✅ همه هشدارها کنسل شد")
+                        else:
+                            answer_callback(token_cbq, cbq_id, "هشداری فعال نبود")
+                        edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, "✅ همه هشدارهای دوره‌ای کنسل شدن.", [])
+
+                    elif cbq_data == "close_myalerts":
+                        answer_callback(token_cbq, cbq_id, "بسته شد")
+                        try:
+                            requests.post(
+                                f"https://api.telegram.org/bot{token_cbq}/deleteMessage",
+                                json={"chat_id": cbq_cid, "message_id": cbq_msg_id},
+                                timeout=10, headers=H)
+                        except: pass
+                    continue
+
                 msg = upd.get("message", {})
                 raw_txt = msg.get("text", "") or ""
                 # normalize: /cmd@botname → /cmd
@@ -552,14 +772,56 @@ def poll_telegram():
                     data = load_alerts()
                     users = data.get("users", [])
                     if cid not in [str(u["chat_id"]) for u in users]:
-                        users.append({"chat_id": cid, "username": uname, "joined_at": now_teh()})
+                        users.append({"chat_id": cid, "username": uname, "joined_at": now_teh(), "custom_name": ""})
                         data["users"] = users
                         ids = data.get("telegram", {}).get("chat_ids", [])
                         if cid not in [str(x) for x in ids]:
                             ids.append(cid)
                         data["telegram"]["chat_ids"] = ids
                         save_alerts(data)
-                    send_tg(token, cid, f"👋 سلام <b>{uname}</b>!\n✅ در سیستم آلارم ثبت شدید. 🔔")
+                    _pending_name[cid] = True
+                    send_tg(token, cid,
+                        f"👋 سلام <b>{uname}</b>!\n\n"
+                        f"لطفاً <b>اسمی که در سایت استفاده می‌کنی</b> رو بنویس:\n"
+                        f"(آلارم‌های شخصیت با همین اسم شناسایی میشن)")
+
+                # ── دریافت اسم custom بعد از /start یا /setname ──────
+                elif cid in _pending_name and not txt.startswith("/"):
+                    custom_name = txt.strip()
+                    if len(custom_name) < 2:
+                        send_tg(token, cid, "⚠️ اسم باید حداقل ۲ حرف باشه. دوباره بنویس:")
+                    else:
+                        data = load_alerts()
+                        users = data.get("users", [])
+                        found = False
+                        for usr in users:
+                            if str(usr.get("chat_id", "")) == cid:
+                                usr["custom_name"] = custom_name
+                                found = True
+                                break
+                        if not found:
+                            users.append({"chat_id": cid, "username": uname, "joined_at": now_teh(), "custom_name": custom_name})
+                            data["users"] = users
+                            ids = data.get("telegram", {}).get("chat_ids", [])
+                            if cid not in [str(x) for x in ids]:
+                                ids.append(cid)
+                            data["telegram"]["chat_ids"] = ids
+                        data["users"] = users
+                        save_alerts(data)
+                        del _pending_name[cid]
+                        send_tg(token, cid,
+                            f"✅ اسم <b>{custom_name}</b> ذخیره شد!\n"
+                            f"از این به بعد آلارم‌هات با این اسم ثبت میشن.\n"
+                            f"توی سایت هم همین اسم رو وارد کن.")
+
+                # ── /setname — تغییر اسم ────────────────────────────
+                elif txt.startswith("/setname"):
+                    _pending_name[cid] = True
+                    data = load_alerts()
+                    users = data.get("users", [])
+                    cur = next((u.get("custom_name","") for u in users if str(u.get("chat_id",""))==cid), "")
+                    cur_info = f"\nاسم فعلی: <b>{cur}</b>" if cur else ""
+                    send_tg(token, cid, f"✏️ اسم جدیدت رو بنویس:{cur_info}")
 
                 # ── /sos ─────────────────────────────────────────────
                 elif txt.startswith("/sos") and (cid == YOUR_CHAT_ID or BROADCAST_MODE):
@@ -649,12 +911,78 @@ def poll_telegram():
                             send_tg(token, cid,
                                 f"✅ <b>آلارم ثبت شد</b>\n\n"
                                 f"💰 <b>{sym}</b> — {arrow}\n"
-                                f"🎯 هدف: <b>{fmt_price(tgt_f, sym)}</b>\n"
+                                f"🎯 هدف: <code>{fmt_price(tgt_f, sym)}</code>\n"
                                 f"📊 قیمت الان: <b>{price_now}</b>"
                                 + (f"\n💬 <i>{comment}</i>" if comment else "") +
                                 f"\n\n⏰ {now_pretty()} (تهران)")
 
+                # ── /mealarm — آلارم شخصی (فقط برای خود فرستنده) ───
+                elif txt.startswith("/mealarm"):
+                    parts = txt.split(maxsplit=4)
+                    if len(parts) < 4:
+                        send_tg(token, cid,
+                            "⚠️ فرمت:\n<code>/mealarm SYMBOL buy|sell PRICE [کامنت]</code>\n\n"
+                            "مثال:\n"
+                            "<code>/mealarm xauusd sell 2350 ناحیه شخصی</code>\n\n"
+                            "این آلارم فقط برای شما ثبت میشه و بقیه نمیبینن.")
+                    else:
+                        sym = parts[1].upper().replace("/", "")
+                        raw_dir = parts[2].lower()
+                        raw_price = parts[3]
+                        comment = parts[4] if len(parts) > 4 else ""
+                        condition = "above" if raw_dir in ("sell","s","سل","above") else "below"
+                        atype = "forex" if any(x in sym for x in ["EUR","GBP","JPY","XAU","XAG","CHF","CAD","AUD","NZD"]) else "crypto"
+                        sender_name = _get_sender_name(msg)
+                        tgt_f = None
+                        try:
+                            tgt_f = float(raw_price)
+                        except ValueError:
+                            send_tg(token, cid, f"❌ قیمت نامعتبر: <code>{raw_price}</code>")
+                        if tgt_f is not None:
+                            send_tg(token, cid, f"⏳ <b>{sym}</b> در حال ثبت آلارم شخصی...")
+                            cur = None
+                            try: cur = get_price(sym, atype)
+                            except: pass
+                            d = load_alerts()
+                            new_alert = {
+                                "id": str(int(time.time()*1000)),
+                                "symbol": sym, "type": atype,
+                                "target_price": tgt_f, "condition": condition,
+                                "comment": comment, "created_by": sender_name,
+                                "active": True, "last_price": cur,
+                                "last_checked": now_teh() if cur else None,
+                                "created_at": now_teh(),
+                                "notify_only": cid,        # فقط به همین chat_id
+                                "private_cid": cid,        # برای فیلتر سایت
+                                "is_private": True
+                            }
+                            d["alerts"].append(new_alert)
+                            save_alerts(d)
+                            arrow = "سل 📈" if condition == "above" else "بای 📉"
+                            price_now = fmt_price(cur, sym) if cur else "—"
+                            send_tg(token, cid,
+                                f"✅ <b>آلارم شخصی ثبت شد</b>\n\n"
+                                f"💰 <b>{sym}</b> — {arrow}\n"
+                                f"🎯 هدف: <code>{fmt_price(tgt_f, sym)}</code>\n"
+                                f"📊 قیمت الان: <b>{price_now}</b>"
+                                + (f"\n💬 <i>{comment}</i>" if comment else "") +
+                                f"\n\n🔒 فقط شما این آلارم رو میبینید\n⏰ {now_pretty()} (تهران)")
+
                 # ── /news ────────────────────────────────────────────
+                elif txt.startswith("/cancel_reminder"):
+                    text_msg, keyboard = build_cancel_reminder_msg(cid)
+                    if keyboard:
+                        send_tg_keyboard(token, cid, text_msg, keyboard)
+                    else:
+                        send_tg(token, cid, text_msg)
+
+                elif txt.startswith("/myalerts"):
+                    text_msg, keyboard = build_myalerts_msg(cid)
+                    if keyboard:
+                        send_tg_keyboard(token, cid, text_msg, keyboard)
+                    else:
+                        send_tg(token, cid, text_msg)
+
                 elif txt.startswith("/news") and cid == YOUR_CHAT_ID:
                     send_tg(token, cid, "⏳ در حال دریافت تقویم اقتصادی...")
                     events, err = fetch_ff_news()
@@ -760,16 +1088,24 @@ def check_alerts():
                         creator = a.get("created_by") or "سیستم"
                         cmt = f"\n💬 <i>{comment}</i>" if comment else ""
                         dist = calc_dist_str(sym, atype, cur, tgt)
+                        private_label = "\n\n🔒 <i>آلارم شخصی — فقط برای شما ارسال شده</i>" if a.get("is_private") else ""
                         fired_msg = (
                             f"🚨 <b>آلارم قیمت!</b>\n\n"
                             f"💰 <b>{sym}</b> — {arrow}\n"
                             f"👤 ارسال‌کننده: <b>{creator}</b>\n\n"
-                            f"🎯 هدف: <b>{fmt_price(tgt,sym)}</b>\n"
+                            f"🎯 هدف: <code>{fmt_price(tgt,sym)}</code>\n"
                             f"📊 قیمت لحظه‌ای: <b>{fmt_price(cur,sym)}</b>\n"
                             f"📏 فاصله: <b>{dist}</b>"
-                            f"{cmt}\n\n⏰ {now_pretty()} (تهران)"
+                            f"{cmt}"
+                            f"{private_label}\n\n⏰ {now_pretty()} (تهران)"
                         )
-                        broadcast(token, notify_cids, fired_msg)
+                        if a.get("is_private") and a.get("notify_only"):
+                            # آلارم شخصی — با دکمه تنظیم هشدار دوره‌ای
+                            priv_cid = str(a["notify_only"])
+                            kb = [[{"text": "⏰ تنظیم هشدار دوره‌ای", "callback_data": f"set_reminder:{priv_cid}:{sym}"}]]
+                            send_tg_keyboard(token, priv_cid, fired_msg, kb)
+                        else:
+                            broadcast(token, notify_cids, fired_msg)
             if fired:
                 arch = data.get("archive", [])
                 for fid in fired:
@@ -1118,7 +1454,35 @@ def config():
 
 @app.route("/api/alerts", methods=["GET"])
 def get_alerts():
-    return jsonify(load_alerts().get("alerts", []))
+    all_alerts = load_alerts().get("alerts", [])
+    # آلارم‌های شخصی (is_private=True) رو از لیست عمومی حذف کن
+    public = [a for a in all_alerts if not a.get("is_private")]
+    return jsonify(public)
+
+@app.route("/api/alerts/my", methods=["GET"])
+def get_my_alerts():
+    """آلارم‌های شخصی یه کاربر — با name یا cid فیلتر میشه"""
+    name = request.args.get("name", "").strip()
+    cid  = request.args.get("cid",  "").strip()
+    if not name and not cid:
+        return jsonify([])
+    data = load_alerts()
+    all_alerts = data.get("alerts", [])
+    # اگه name داریم، chat_id متناظر رو از users پیدا کن
+    resolved_cid = cid
+    if name and not resolved_cid:
+        for usr in data.get("users", []):
+            if usr.get("custom_name", "").strip() == name:
+                resolved_cid = str(usr.get("chat_id", ""))
+                break
+    my = [
+        a for a in all_alerts
+        if a.get("is_private") and (
+            (resolved_cid and str(a.get("private_cid", "")) == resolved_cid) or
+            (name and a.get("created_by", "").strip() == name)
+        )
+    ]
+    return jsonify(my)
 
 @app.route("/api/alerts", methods=["POST"])
 def add_alert():
@@ -1218,13 +1582,13 @@ def instant_alert():
     arrow = "📈 ناحیه سل" if condition == "above" else "📉 ناحیه بای"
     cmt = f"\n💬 <i>{comment}</i>" if comment else ""
     price_text = fmt_price(cur, sym) if cur else "—"
-    tp_text = f"\n🎯 قیمت هدف: <b>{fmt_price(target_price, sym)}</b>" if target_price else ""
+    tp_text = f"\n🎯 قیمت هدف: <code>{fmt_price(target_price, sym)}</code>" if target_price else ""
     alert_title = "آلارم قیمت" if target_price else "آلارم فوری"
     out_msg = (
         f"🚨 <b>{alert_title}!</b>\n\n"
         f"💰 <b>{sym}</b> — {arrow}\n"
         f"👤 ارسال‌کننده: <b>{creator or 'سیستم'}</b>\n\n"
-        + (f"🎯 هدف: <b>{fmt_price(target_price, sym)}</b>\n" if target_price else "")
+        + (f"🎯 هدف: <code>{fmt_price(target_price, sym)}</code>\n" if target_price else "")
         + f"📊 قیمت لحظه‌ای: <b>{price_text}</b>"
         f"{cmt}\n\n⏰ {now_pretty()} (تهران)"
     )
@@ -1411,6 +1775,9 @@ import uuid as _uuid
 def generate_id():
     """ID یکتا حتی برای تریدهای همزمان"""
     return str(int(time.time() * 1000)) + str(_uuid.uuid4().hex[:4])
+
+def calc_exit_type(outcome, risk_pips, mfe_pip, found_3r, exit_type_stored=None):
+    """نوع خروج رو بر اساس outcome و MFE محاسبه کن"""
     if exit_type_stored in ("sl", "tp", "tp3"):
         return exit_type_stored
     if outcome == "loss":
@@ -2187,8 +2554,9 @@ def overall_analysis():
             rp = abs(float(t["entry"]) - float(t["sl_price"])) * mul
         mfe = float(t.get("review_mfe") or t.get("mfe_pip") or 0)
         return t.get("exit_type") or calc_exit_type(t.get("outcome",""), rp, mfe, t.get("found_3r", False))
-    win_tp_count = sum(1 for t in closed if _et(t) == "tp")
-    win_3r_count = sum(1 for t in closed if _et(t) == "tp3")
+    win_tp_count  = sum(1 for t in closed if _et(t) == "tp")
+    win_3r_count  = sum(1 for t in closed if _et(t) == "tp3")
+    win_manual_count = sum(1 for t in closed if _et(t) == "manual")
 
     early_exit_count = 0
     early_exit_left_r_list = []
@@ -2284,9 +2652,11 @@ def overall_analysis():
 
         # ─── محاسبات جدید ───
         if has_valid_risk:
-            # ۱. hypothetical 3R: اگه این ترید رو تا 3R نگه می‌داشتیم چی می‌شد؟
+            # ۱. hypothetical 3R: اگه همه تریدها تا 3R نگه می‌داشتیم چی می‌شد؟
+            # باگ‌فیکس: برای win، hypothetical باید mfe_r باشه نه taken_r
+            # taken_r ممکنه کمتر از mfe_r باشه (زود بستیم)
             if outcome == "win":
-                h3r = 3.0 if mfe_r >= 3.0 else taken_r  # اگه MFE به 3R رسید، 3R بگیر
+                h3r = min(3.0, mfe_r) if mfe_r > 0 else taken_r
             else:
                 h3r = -1.0  # باخت همیشه -1R
             hypothetical_3r_list.append(h3r)
@@ -2402,7 +2772,14 @@ def overall_analysis():
                         "extra": {"taken_r": taken_r, "mfe_r": mfe_r, "left_r": left_r}})
         else:
             # باخت‌ها
-            mbe_pip = float(t.get("review_mfe") or t.get("mfe_before_sl_pip") or 0)
+            # باگ‌فیکس: برای باخت، review_mfe = MFE قبل از SL (کاربر وارد کرده)
+            # اگه review_mfe نداشت، از mfe_before_sl_pip بخون نه mfe_pip
+            # mfe_pip برای باخت = MFE کل ترید (که ممکنه بعد از SL هم ادامه داشته باشه)
+            mbe_pip = float(
+                t.get("review_mfe")             # اول review دستی (پیپ)
+                or t.get("mfe_before_sl_pip")   # بعد مقدار سیستمی قبل از SL
+                or 0
+            )
             mbe_r = round(mbe_pip / risk_pips, 2) if has_valid_risk else 0.0
 
             psl_manual = t.get("review_reversal_target_pips")
@@ -2454,6 +2831,10 @@ def overall_analysis():
 
 
         # ─── فری‌ریسک ───
+        # باگ‌فیکس: تریدهای manual (زود بسته) که passed_1r بودن
+        # هم باید در fr_missed حساب بشن — چون به 1R رسیدی ولی نگه نداشتی
+        _et_this = t.get("exit_type") or calc_exit_type(outcome, risk_pips,
+            float(t.get("review_mfe") or t.get("mfe_pip") or 0), t.get("found_3r", False))
         if outcome == "loss":
             if free_risk_done:
                 free_risk_done_count += 1
@@ -2461,6 +2842,9 @@ def overall_analysis():
             elif fr_possible:
                 fr_missed_count += 1
                 detail_fr_missed.append({**tshort, "detail": f"SL={round(risk_pips,1) if has_valid_risk else '—'}p | {entry_time_short}"})
+        elif outcome == "win" and _et_this == "manual" and passed_1r and has_valid_risk:
+            # زود بستن بعد از 1R — missed opportunity برای نگه‌داشتن بیشتر
+            detail_fr_missed.append({**tshort, "detail": f"manual بسته شد بعد از {taken_r:.1f}R (1R رسیده بود) | {entry_time_short}"})
 
         # ─── خلاصه متنی برای AI ───
         mfe_r_str  = f"{mfe_r:.2f}R"  if (has_valid_risk and mfe_r)  else "—"
@@ -2565,7 +2949,7 @@ def overall_analysis():
         sym_lines.append(f"{s}: {wr_s}% برد ({v['wins']}/{tot}) | R:{v['total_r']:+.2f}R")
     numeric = {
         "total": total, "wins": wins, "losses": losses, "winrate": wr,
-        "win_tp_count": win_tp_count, "win_3r_count": win_3r_count,
+        "win_tp_count": win_tp_count, "win_3r_count": win_3r_count, "win_manual_count": win_manual_count,
         "avg_taken_r": avg_taken_r, "avg_mfe_r": avg_mfe_r,
         "early_exit_count": early_exit_count, "early_exit_avg_pip": avg_early_r,
         "fr_missed_count": fr_missed_count,
@@ -2601,7 +2985,7 @@ def overall_analysis():
         f"=== آمار کلی ===\n"
         f"تعداد: {total} | برد: {wins} | باخت: {losses} | نرخ برد: {wr}%\n"
         f"{'⚠️ '+str(no_sl_count)+' ترید بدون SL (از محاسبات R حذف شدند)\n' if no_sl_count else ''}"
-        f"بردها: {win_3r_count} تا 3R کامل | {win_tp_count} تا زودخروج\n"
+        f"بردها: {win_3r_count} تا 3R کامل | {win_tp_count} تا TP زودخروج" + (f" | {win_manual_count} تا بسته‌شدن دستی قبل از TP" if win_manual_count else "") + "\n"
         f"R واقعی گرفته شده: {total_actual_r:+.2f}R | اگه همه تا 3R نگه می‌داشتیم: {total_hypothetical_3r:+.2f}R\n"
         f"→ با نگه داشتن تا 3R، {gain_if_held:+.2f}R بیشتر/کمتر می‌گرفتیم\n"
         f"میانگین R گرفته: {avg_taken_r:+.2f}R | میانگین MFE: {avg_mfe_r:.2f}R | میانگین MAE: {avg_mae_r:.2f}R\n\n"
@@ -3022,7 +3406,29 @@ def add_journal_mt4():
     mul       = get_pip_multiplier(sym)
     sl_pips   = round(abs(entry - float(sl_price)) * mul, 1) if sl_price else None
     tp_pips   = round(abs(float(tp_price) - entry) * mul, 1) if tp_price else None
-    exit_type = body.get("exit_type") or ("sl" if outcome == "loss" else "tp" if outcome == "win" else None)
+
+    # تشخیص exit_type دقیق
+    _exit_type_from_ea = body.get("exit_type")
+    if _exit_type_from_ea in ("sl", "tp", "tp3", "manual"):
+        exit_type = _exit_type_from_ea
+    elif outcome == "loss":
+        exit_type = "sl"
+    elif outcome == "win":
+        if exit_price and tp_price and sl_price:
+            _tp_f   = float(tp_price)
+            _sl_f   = float(sl_price)
+            _exit_f = float(exit_price)
+            _risk   = abs(entry - _sl_f) * mul
+            _diff_from_tp = abs(_exit_f - _tp_f) * mul
+            if _diff_from_tp <= max(2.0, _risk * 0.10):
+                exit_type = "tp"
+            else:
+                exit_type = "manual"
+            print(f"[MT5] exit_type auto: exit={_exit_f} tp={_tp_f} diff={_diff_from_tp:.1f}pip risk={_risk:.1f}pip -> {exit_type}")
+        else:
+            exit_type = "tp"
+    else:
+        exit_type = None
 
     trade = {
         "id":           generate_id(),
@@ -3137,6 +3543,126 @@ def mt4_status():
     return jsonify({"sent": ids, "total": len(ids)})
 
 # =====================================================================
+# Watching endpoints — EA این‌ها رو هر بار ران میشه چک میکنه
+# =====================================================================
+
+@app.route("/api/journal/watching", methods=["GET"])
+def get_watching_trades():
+    """لیست تریدهایی که هنوز تعیین تکلیف نشدن (watching)"""
+    journal = load_journal()
+    watching = []
+    for t in journal:
+        if t.get("status") == "watching" or (t.get("source") == "mt5_ea" and not t.get("found_3r") and t.get("outcome") == "win"):
+            watching.append({
+                "id":           t.get("id"),
+                "sym":          t.get("sym"),
+                "tf":           t.get("tf", "15m"),
+                "direction":    t.get("direction"),
+                "entry":        t.get("entry"),
+                "exit":         t.get("exit"),         # قیمت TP
+                "exitTime":     t.get("exitTime"),      # آخرین کندل موجود از اینجاست
+                "sl_price":     t.get("sl_price"),
+                "tp_price":     t.get("tp_price"),
+                "outcome":      t.get("outcome"),
+                "found_3r":     t.get("found_3r", False),
+                "mt4_position_id": t.get("mt4_position_id"),
+            })
+    print(f"[WATCHING] {len(watching)} ترید در جریان")
+    return jsonify({"watching": watching, "total": len(watching)})
+
+
+@app.route("/api/journal/mt4/update-watching", methods=["POST"])
+def update_watching_trade():
+    """
+    EA کندل‌های جدید یه ترید watching رو میفرسته.
+    سرور چک میکنه SL خورده یا 3R زده شده.
+    """
+    body = request.json or {}
+    trade_id     = body.get("id")
+    new_candles  = body.get("candle_snapshot", [])
+
+    if not trade_id or not new_candles:
+        return jsonify({"ok": False, "error": "id و candle_snapshot الزامی"}), 400
+
+    journal = load_journal()
+    trade = next((t for t in journal if t.get("id") == trade_id), None)
+    if not trade:
+        return jsonify({"ok": False, "error": "ترید یافت نشد"}), 404
+
+    sym       = trade.get("sym", "")
+    direction = trade.get("direction", "BUY")
+    entry     = float(trade.get("entry", 0))
+    sl_price  = trade.get("sl_price")
+    exit_price= float(trade.get("exit", 0))
+    mul       = get_pip_multiplier(sym)
+    is_buy    = direction == "BUY"
+
+    if not sl_price:
+        return jsonify({"ok": False, "error": "sl_price ندارد"}), 400
+
+    sl_f      = float(sl_price)
+    risk_pips = abs(entry - sl_f) * mul
+    tp3_price = (entry + 3 * risk_pips / mul) if is_buy else (entry - 3 * risk_pips / mul)
+
+    # merge کندل‌های جدید با snapshot موجود
+    existing  = trade.get("candle_snapshot", [])
+    merged    = merge_snapshot(existing, new_candles)
+
+    # چک 3R و SL روی کندل‌های بعد از خروج
+    hit_3r = False
+    hit_sl = False
+    new_mfe = float(trade.get("mfe_pip") or 0)
+
+    # فقط کندل‌های بعد از exitTime رو چک کن
+    exit_ts = None
+    try:
+        from datetime import datetime as _dt
+        et = _dt.strptime(str(trade.get("exitTime",""))[:16], "%Y-%m-%d %H:%M")
+        exit_ts = int(et.timestamp())
+    except: pass
+
+    for c in new_candles:
+        ct = c.get("t", 0)
+        if exit_ts and ct < exit_ts: continue
+        h = float(c.get("h", 0))
+        l = float(c.get("l", 0))
+
+        # MFE بعد از خروج
+        post_profit = (h - exit_price) * mul if is_buy else (exit_price - l) * mul
+        if post_profit > new_mfe: new_mfe = post_profit
+
+        # 3R چک
+        if is_buy and h >= tp3_price:  hit_3r = True; break
+        if not is_buy and l <= tp3_price: hit_3r = True; break
+
+        # SL برگشت چک
+        if is_buy and l <= sl_f:  hit_sl = True; break
+        if not is_buy and h >= sl_f: hit_sl = True; break
+
+    # آپدیت ترید
+    trade["candle_snapshot"] = merged
+    trade["mfe_pip"] = round(new_mfe, 1)
+
+    if hit_3r:
+        trade["status"]       = "closed"
+        trade["found_3r"]     = True
+        trade["exit_type"]    = "tp3"
+        trade["pending_check"]= False
+        trade["snapshot_locked"] = True
+        trade["exitNote"]     = "EA: 3R کامل شد بعد از تارگت"
+        print(f"[WATCHING] ✅ {sym} 3R زده شد — closed")
+    elif hit_sl:
+        trade["status"]       = "closed"
+        trade["pending_check"]= False
+        trade["snapshot_locked"] = True
+        trade["exitNote"]     = "EA: SL خورد بعد از تارگت (چارت کامل)"
+        print(f"[WATCHING] ✅ {sym} SL برگشت — closed")
+    else:
+        trade["last_poll"]    = now_teh()
+        print(f"[WATCHING] ⏳ {sym} هنوز تعیین تکلیف نشده — کندل‌ها آپدیت شد")
+
+    save_trade(trade)
+    return jsonify({"ok": True, "status": trade["status"], "found_3r": trade.get("found_3r", False), "hit_sl": hit_sl, "hit_3r": hit_3r})
 
 print("=" * 60)
 print(f"[STARTUP] 🚀 سرور در حال راه‌اندازی...")
