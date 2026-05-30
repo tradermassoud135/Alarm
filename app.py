@@ -1027,33 +1027,39 @@ def poll_telegram():
                         except ValueError:
                             send_tg(token, cid, f"❌ قیمت نامعتبر: <code>{raw_price}</code>")
                         if tgt_f is not None:
-                            # پیام در حال ثبت
-                            send_tg(token, cid, f"⏳ <b>{sym}</b> در حال ثبت آلارم...")
-                            cur = None
-                            try: cur = get_price(sym, atype)
-                            except: pass
-                            d = load_alerts()
+                            arrow = "سل 📈" if condition == "above" else "بای 📉"
                             new_alert = {
                                 "id": str(int(time.time()*1000)),
                                 "symbol": sym, "type": atype,
                                 "target_price": tgt_f, "condition": condition,
                                 "comment": comment, "created_by": sender_name,
-                                "active": True, "last_price": cur,
-                                "last_checked": now_teh() if cur else None,
+                                "active": True, "last_price": None,
+                                "last_checked": None,
                                 "created_at": now_teh(),
                                 "notify_only": YOUR_CHAT_ID if not BROADCAST_MODE else None
                             }
+                            d = load_alerts()
                             d["alerts"].append(new_alert)
-                            save_alerts(d)
-                            arrow = "سل 📈" if condition == "above" else "بای 📉"
-                            price_now = fmt_price(cur, sym) if cur else "—"
+                            # اول save کن — سریع
+                            _sb_upsert_alert(new_alert)
+                            _cache_alerts = d
+                            # فوری پیام تأیید بده
                             send_tg(token, cid,
                                 f"✅ <b>آلارم ثبت شد</b>\n\n"
                                 f"💰 <b>{sym}</b> — {arrow}\n"
-                                f"🎯 هدف: <code>{fmt_price(tgt_f, sym)}</code>\n"
-                                f"📊 قیمت الان: <b>{price_now}</b>"
+                                f"🎯 هدف: <code>{fmt_price(tgt_f, sym)}</code>"
                                 + (f"\n💬 <i>{comment}</i>" if comment else "") +
                                 f"\n\n⏰ {now_pretty()} (تهران)")
+                            # در background قیمت فعلی رو بگیر و آپدیت کن
+                            def _bg_price(alert=new_alert, s=sym, t=atype, tok=token, c=cid):
+                                try:
+                                    cur = get_price(s, t)
+                                    if cur:
+                                        alert["last_price"] = cur
+                                        alert["last_checked"] = now_teh()
+                                        _sb_upsert_alert(alert)
+                                except: pass
+                            threading.Thread(target=_bg_price, daemon=True).start()
 
                 # ── /mealarm — آلارم شخصی (فقط برای خود فرستنده) ───
                 elif txt.startswith("/mealarm"):
@@ -1078,34 +1084,38 @@ def poll_telegram():
                         except ValueError:
                             send_tg(token, cid, f"❌ قیمت نامعتبر: <code>{raw_price}</code>")
                         if tgt_f is not None:
-                            send_tg(token, cid, f"⏳ <b>{sym}</b> در حال ثبت آلارم شخصی...")
-                            cur = None
-                            try: cur = get_price(sym, atype)
-                            except: pass
-                            d = load_alerts()
+                            arrow = "سل 📈" if condition == "above" else "بای 📉"
                             new_alert = {
                                 "id": str(int(time.time()*1000)),
                                 "symbol": sym, "type": atype,
                                 "target_price": tgt_f, "condition": condition,
                                 "comment": comment, "created_by": sender_name,
-                                "active": True, "last_price": cur,
-                                "last_checked": now_teh() if cur else None,
+                                "active": True, "last_price": None,
+                                "last_checked": None,
                                 "created_at": now_teh(),
-                                "notify_only": cid,        # فقط به همین chat_id
-                                "private_cid": cid,        # برای فیلتر سایت
+                                "notify_only": cid,
+                                "private_cid": cid,
                                 "is_private": True
                             }
+                            d = load_alerts()
                             d["alerts"].append(new_alert)
-                            save_alerts(d)
-                            arrow = "سل 📈" if condition == "above" else "بای 📉"
-                            price_now = fmt_price(cur, sym) if cur else "—"
+                            _sb_upsert_alert(new_alert)
+                            _cache_alerts = d
                             send_tg(token, cid,
                                 f"✅ <b>آلارم شخصی ثبت شد</b>\n\n"
                                 f"💰 <b>{sym}</b> — {arrow}\n"
-                                f"🎯 هدف: <code>{fmt_price(tgt_f, sym)}</code>\n"
-                                f"📊 قیمت الان: <b>{price_now}</b>"
+                                f"🎯 هدف: <code>{fmt_price(tgt_f, sym)}</code>"
                                 + (f"\n💬 <i>{comment}</i>" if comment else "") +
                                 f"\n\n🔒 فقط شما این آلارم رو میبینید\n⏰ {now_pretty()} (تهران)")
+                            def _bg_price_me(alert=new_alert, s=sym, t=atype):
+                                try:
+                                    cur = get_price(s, t)
+                                    if cur:
+                                        alert["last_price"] = cur
+                                        alert["last_checked"] = now_teh()
+                                        _sb_upsert_alert(alert)
+                                except: pass
+                            threading.Thread(target=_bg_price_me, daemon=True).start()
 
                 # ── /news ────────────────────────────────────────────
                 elif txt.startswith("/cancel_reminder"):
