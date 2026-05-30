@@ -43,8 +43,8 @@ body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(
 .brand-name em{color:var(--green);font-style:normal}
 .brand-sub{font-size:11px;color:var(--text3);font-family:var(--mono);margin-top:2px}
 .hdr-right{display:flex;align-items:center;gap:8px}
-.journal-btn{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:10px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid rgba(160,112,255,.3);background:linear-gradient(135deg,rgba(160,112,255,.12),rgba(77,168,255,.08));color:var(--purple);font-family:var(--sans);transition:.2s;text-decoration:none;letter-spacing:.3px}
-.journal-btn:hover{background:linear-gradient(135deg,rgba(160,112,255,.22),rgba(77,168,255,.15));border-color:var(--purple);transform:translateY(-1px);box-shadow:0 4px 14px rgba(160,112,255,.2)}
+.journal-btn{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:10px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid rgba(140,80,255,.5);background:linear-gradient(135deg,rgba(100,40,180,.55),rgba(60,20,120,.7));color:#e0c8ff;font-family:var(--sans);transition:.2s;text-decoration:none;letter-spacing:.3px;box-shadow:0 2px 10px rgba(100,40,200,.25)}
+.journal-btn:hover{background:linear-gradient(135deg,rgba(120,50,210,.7),rgba(80,30,160,.85));border-color:#a070ff;transform:translateY(-1px);box-shadow:0 5px 18px rgba(120,50,210,.45);color:#fff}
 .journal-btn svg{opacity:.85}
 .live-pill{display:flex;align-items:center;gap:6px;padding:7px 13px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;font-size:11px;font-family:var(--mono);color:var(--text2)}
 .ldot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green);animation:blink 2s ease-in-out infinite}
@@ -60,18 +60,18 @@ body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(
 .scard-val.green{color:var(--green)}.scard-val.gold{color:var(--gold)}.scard-val.purple{color:var(--purple)}
 .scard-sub{font-size:11px;color:var(--text2);margin-top:5px;font-family:var(--mono)}
 
-.user-card{background:linear-gradient(135deg,var(--bg3),var(--bg4));border:1px solid rgba(160,112,255,.3);border-radius:var(--rad2);padding:0.7rem 1.2rem;margin-bottom:1.2rem;display:flex;align-items:center;justify-content:space-between;cursor:pointer;transition:all 0.2s ease}
+.user-card{background:linear-gradient(135deg,var(--bg3),var(--bg4));border:1px solid rgba(240,165,0,.3);border-radius:var(--rad2);padding:0.7rem 1.2rem;margin-bottom:1.2rem;display:flex;align-items:center;justify-content:space-between;cursor:pointer;transition:all 0.2s ease}
 .user-card:hover{background:var(--purdim);border-color:var(--purple);transform:translateY(-1px);box-shadow:0 6px 14px rgba(0,0,0,.3)}
 .user-name-label{font-size:11px;font-family:var(--mono);color:var(--text3);margin-left:8px}
 .user-name-value{font-family:var(--mono);font-size:16px;font-weight:700;color:var(--purple);letter-spacing:-0.3px}
-.user-edit-icon{font-size:14px;color:var(--purple);background:rgba(160,112,255,.15);padding:5px 10px;border-radius:30px;transition:0.2s}
-.user-card:hover .user-edit-icon{background:rgba(160,112,255,.3);transform:rotate(15deg)}
+.user-edit-icon{font-size:14px;color:var(--purple);background:rgba(240,165,0,.15);padding:5px 10px;border-radius:30px;transition:0.2s}
+.user-card:hover .user-edit-icon{background:rgba(240,165,0,.3);transform:rotate(15deg)}
 
 .tabs{display:flex;gap:4px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rad);padding:4px;margin-bottom:1.25rem;width:fit-content;flex-wrap:wrap}
 .tab{padding:7px 16px;border-radius:9px;font-size:12px;font-weight:500;cursor:pointer;color:var(--text2);border:none;background:transparent;font-family:var(--sans);transition:.18s}
 .tab.on{background:var(--bg3);color:var(--text);border:1px solid var(--border2)}
 .tab.on.t-alerts{color:var(--green);border-color:rgba(0,217,139,.3)}
-.tab.on.t-my{color:var(--purple);border-color:rgba(160,112,255,.3)}
+.tab.on.t-my{color:var(--purple);border-color:rgba(240,165,0,.3)}
 .tab.on.t-arch{color:var(--gold);border-color:rgba(240,165,0,.3)}
 .tab.on.t-users{color:var(--blue);border-color:rgba(77,168,255,.3)}
 .pnl{display:none}.pnl.on{display:block}
@@ -129,6 +129,54 @@ select option{background:var(--bg3)}
 .acard::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--card-accent,var(--green));opacity:.7}
 .acard.above{--card-accent:var(--green)}
 .acard.below{--card-accent:var(--red)}
+
+/* ── آلارم شخصی (me_alarm) — کاملاً متمایز ── */
+.acard.private-alert{
+  background:linear-gradient(145deg,rgba(240,165,0,.18),rgba(200,130,0,.10));
+  border:2px solid rgba(240,165,0,.7);
+  border-radius:18px;
+  box-shadow:0 0 0 1px rgba(240,165,0,.15), 0 8px 32px rgba(200,130,0,.2);
+  --card-accent:var(--purple);
+}
+.acard.private-alert::before{
+  height:4px;
+  background:linear-gradient(90deg,#f0a500,#c87a00,#f0a500);
+  background-size:200% 100%;
+  animation:privShimmer 3s linear infinite;
+  opacity:1;
+}
+@keyframes privShimmer{0%{background-position:0% 0}100%{background-position:200% 0}}
+.acard.private-alert:hover{
+  border-color:rgba(240,165,0,.95);
+  box-shadow:0 0 0 1px rgba(240,165,0,.3), 0 12px 40px rgba(200,130,0,.3);
+  transform:translateY(-3px);
+}
+.acard.private-alert::after{
+  content:'🔒';
+  position:absolute;top:14px;left:14px;
+  font-size:15px;
+  filter:drop-shadow(0 0 6px rgba(240,165,0,.9));
+}
+.private-badge{
+  display:inline-flex;align-items:center;gap:5px;
+  background:linear-gradient(135deg,rgba(240,165,0,.35),rgba(200,120,0,.2));
+  color:#ffe066;
+  border:1px solid rgba(240,165,0,.6);
+  border-radius:20px;padding:3px 11px;
+  font-size:10px;font-weight:700;font-family:var(--mono);
+  letter-spacing:.05em;
+  box-shadow:0 0 8px rgba(240,165,0,.25);
+}
+/* لیست */
+.alert-row.private-alert{
+  background:linear-gradient(90deg,rgba(240,165,0,.10),rgba(200,130,0,.06));
+  border:2px solid rgba(240,165,0,.55);
+  box-shadow:inset 3px 0 0 rgba(240,165,0,.9), 0 4px 16px rgba(200,130,0,.15);
+}
+.alert-row.private-alert .alert-row-main:hover{background:rgba(240,165,0,.1)}
+.alert-row.private-alert .row-symbol{color:#ffe066;font-weight:800;text-shadow:0 0 12px rgba(240,165,0,.6)}
+
+
 .acard-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
 .acard-badge{display:flex;align-items:center;gap:12px}
 .abadge{width:42px;height:42px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:12px;font-weight:700}
@@ -225,6 +273,7 @@ select option{background:var(--bg3)}
 .err-item:last-child{border-bottom:none}
 .empty{text-align:center;padding:3rem 1rem;color:var(--text3)}
 .empty-ico{font-size:28px;margin-bottom:10px;opacity:.4}
+
 #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);padding:10px 22px;border-radius:10px;font-size:13px;background:var(--bg4);border:1px solid var(--border3);color:var(--text);box-shadow:0 8px 32px rgba(0,0,0,.4);opacity:0;transition:opacity .25s;pointer-events:none;z-index:9999;font-family:var(--sans);white-space:nowrap}
 #toast.show{opacity:1}
 </style>
@@ -393,6 +442,7 @@ updateUserDisplay();
 
 // ========== Global state ==========
 let allAlertsData = [];
+let allPrivateData = [];   // آلارم‌های شخصی (is_private) که از /api/alerts/my میان
 let currentTab = 'alerts';     // 'alerts', 'myalerts', 'archive', 'users'
 let currentSortAll = 'distance', currentSortMy = 'distance';
 let currentSearchAll = '', currentSearchMy = '';
@@ -594,6 +644,7 @@ function buildCard(a) {
   const cur = a.last_price;
   const tgt = a.target_price;
   const isAbove = a.condition === 'above';
+  const isPrivate = !!a.is_private;
   const di = calcDist(cur, tgt, a.symbol);
   const iv = getIntervalLabel(a.check_interval, a.symbol);
   const ago = minutesAgo(a.last_checked);
@@ -602,22 +653,28 @@ function buildCard(a) {
   const agoHtml = ago ? `<span class="ago-lbl ${iv.cls}">${ago}</span>` : '';
   const staleHtml = a.price_stale ? `<div style="font-size:10px;color:var(--gold);margin-top:6px;padding:4px 10px;background:var(--gdold);border-radius:8px;">⏸ بازار تعطیل — آخرین قیمت ${a.price_stale.slice(11,16)}</div>` : '';
   const creatorName = a.created_by || 'ناشناس';
-  const liveHtml = cur != null ? `<div class="pbox-val live" id="pv-${a.id}" style="${a.price_stale?'color:var(--gold)':''}">$${fmt(cur,a.symbol)}</div>` : `<div class="pbox-val loading" id="pv-${a.id}">دریافت...</div>`;
+  const privateBadge = isPrivate ? `<div class="private-badge">🔒 آلارم شخصی</div>` : '';
+  const badgeStyle = isPrivate ? 'background:var(--purdim);color:var(--purple);border-color:rgba(240,165,0,.3)' : '';
+  const nameStyle = isPrivate ? 'color:var(--purple)' : '';
+  const liveColor = a.price_stale ? 'color:var(--gold)' : (isPrivate ? 'color:var(--purple)' : '');
+  const pboxLiveStyle = isPrivate ? 'border-color:rgba(160,112,255,.2);background:rgba(160,112,255,.05)' : '';
+  const liveHtml = cur != null ? `<div class="pbox-val live" id="pv-${a.id}" style="${liveColor}">$${fmt(cur,a.symbol)}</div>` : `<div class="pbox-val loading" id="pv-${a.id}">دریافت...</div>`;
   const distHtml = cur != null ? `<div class="acard-dist" id="pd-${a.id}"><div class="dist-row"><span class="dist-lbl">فاصله تا هدف</span><span class="dist-chip ${di.cls}">${di.text}</span></div><div class="dist-bar-bg"><div class="dist-bar ${di.cls}" style="width:${di.barPct}%"></div></div></div>` : `<div id="pd-${a.id}"></div>`;
-  return `<div class="acard ${isAbove?'above':'below'} iv-${iv.cls}" data-id="${a.id}">
+  return `<div class="acard ${isAbove?'above':'below'} iv-${iv.cls}${isPrivate?' private-alert':''}" data-id="${a.id}">
     <div class="acard-top">
       <div class="acard-badge">
-        <div class="abadge ${isCrypto?'c':'f'}">${short}</div>
+        <div class="abadge ${isCrypto?'c':'f'}" style="${badgeStyle}">${short}</div>
         <div>
-          <div class="acard-name">${a.symbol} <span class="wdot ${cur!=null?'watch':'pend'}"></span></div>
+          <div class="acard-name" style="${nameStyle}">${a.symbol} <span class="wdot ${cur!=null?'watch':'pend'}"></span></div>
           <div class="acard-type">${a.type.toUpperCase()} ${ivBadge}</div>
           <div class="creator-badge"><i>👤</i> ${creatorName}</div>
+          ${privateBadge}
         </div>
       </div>
       <button class="acard-del" onclick="deleteAlert('${a.id}')">✕</button>
     </div>
     <div class="acard-prices">
-      <div class="pbox"><div class="pbox-lbl">قیمت لحظه‌ای ${agoHtml}</div>${liveHtml}</div>
+      <div class="pbox" style="${pboxLiveStyle}"><div class="pbox-lbl">قیمت لحظه‌ای ${agoHtml}</div>${liveHtml}</div>
       <div class="pbox"><div class="pbox-lbl">قیمت هدف</div><div class="pbox-val target ${isAbove?'above':'below'}">$${fmt(tgt,a.symbol)}</div></div>
     </div>
     ${distHtml}
@@ -633,6 +690,7 @@ function buildCard(a) {
 function buildListRow(a) {
   const cur = a.last_price;
   const tgt = a.target_price;
+  const isPrivate = !!a.is_private;
   const di = calcDist(cur, tgt, a.symbol);
   const iv = getIntervalLabel(a.check_interval, a.symbol);
   const ago = minutesAgo(a.last_checked);
@@ -640,11 +698,13 @@ function buildListRow(a) {
   const liveDisplay = cur != null ? fmt(cur, a.symbol) : '...';
   const targetDisplay = fmt(tgt, a.symbol);
   const distClass = di.cls === 'far' ? 'far' : (di.cls === 'close' ? 'close' : 'na');
-  return `<div class="alert-row" data-id="${a.id}">
+  const privateBadgeRow = isPrivate ? `<span style="font-size:9px;background:rgba(160,112,255,.2);color:var(--purple);border:1px solid rgba(240,165,0,.3);border-radius:10px;padding:1px 7px;font-family:var(--mono)">🔒 شخصی</span>` : '';
+  return `<div class="alert-row${isPrivate?' private-alert':''}" data-id="${a.id}">
     <div class="alert-row-main" onclick="toggleRowDetails('${a.id}')">
       <div class="row-left">
         <div class="row-symbol">${a.symbol} <span class="wdot ${cur!=null?'watch':'pend'}"></span></div>
         <span class="row-creator"><i>👤</i> ${creatorName}</span>
+        ${privateBadgeRow}
       </div>
       <div style="display:flex; align-items:center; gap:8px;">
         <span class="row-target-price">🎯 $${targetDisplay}</span>
@@ -679,7 +739,8 @@ function filterAlerts() {
   if (currentTab === 'alerts') {
     currentSearchAll = document.getElementById('search-input-all').value.toLowerCase();
     currentSortAll = document.getElementById('sort-select-all').value;
-    let filtered = allAlertsData.filter(a => a.active);
+    // آلارم‌های شخصی (is_private) از لیست عمومی حذف می‌شن
+    let filtered = allAlertsData.filter(a => a.active && !a.is_private);
     if (currentSearchAll) {
       filtered = filtered.filter(a => 
         a.symbol.toLowerCase().includes(currentSearchAll) || 
@@ -692,7 +753,14 @@ function filterAlerts() {
     currentSearchMy = document.getElementById('search-input-my').value.toLowerCase();
     currentSortMy = document.getElementById('sort-select-my').value;
     const currentUser = getUserName();
+    // آلارم‌های من = آلارم‌های عادی کاربر + آلارم‌های شخصی (is_private) با همان نام
     let filtered = allAlertsData.filter(a => a.active && a.created_by === currentUser);
+    // آلارم‌های شخصی از API جداگانه (allPrivateData) اضافه می‌شن اگه اسم match داشت
+    for (const pa of allPrivateData) {
+      if (pa.active && pa.created_by === currentUser && !filtered.find(x => x.id === pa.id)) {
+        filtered.push(pa);
+      }
+    }
     if (currentSearchMy) {
       filtered = filtered.filter(a => 
         a.symbol.toLowerCase().includes(currentSearchMy) || 
@@ -759,7 +827,23 @@ async function loadAlerts() {
     const r = await fetch(`${API}/api/alerts`);
     const alerts = await r.json();
     allAlertsData = alerts;
-    const active = alerts.filter(a => a.active);
+
+    // fetch آلارم‌های شخصی بر اساس نام کاربر از endpoint جداگانه
+    const userName = getUserName();
+    try {
+      const rMy = await fetch(`${API}/api/alerts/my?name=${encodeURIComponent(userName)}`);
+      const myPrivate = await rMy.json();
+      // آلارم‌های شخصی رو به allAlertsData اضافه کن (اگه duplicate نبودن)
+      for (const pa of myPrivate) {
+        if (!allAlertsData.find(x => x.id === pa.id)) {
+          allAlertsData.push(pa);
+        }
+      }
+      allPrivateData = myPrivate;
+    } catch { allPrivateData = []; }
+
+    const active = alerts.filter(a => a.active && !a.is_private);
+    const myPrivateActive = allPrivateData.filter(a => a.active);
     document.getElementById('sc-alerts').textContent = active.length;
     const updDot = document.getElementById('upd-dot'), updTxt = document.getElementById('upd-txt'), updTime = document.getElementById('upd-time');
     if (!_forexOpen) { updDot.className = 'upd-dot err'; updTxt.textContent = '⚠️ بازار فارکس تعطیل است (شنبه/یکشنبه) — کریپتو فعال'; }
