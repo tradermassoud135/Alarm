@@ -1003,10 +1003,11 @@ def poll_telegram():
                         arrow = "📈 ناحیه سل" if condition == "above" else "📉 ناحیه بای"
                         cmt = f"\n💬 <i>{comment}</i>" if comment else ""
                         price_text = fmt_price(cur, sym) if cur else "—"
+                        hashtag = "#" + re.sub(r'[^\w]', '_', sender_name).strip('_')
                         out_msg = (
                             f"🚨 <b>آلارم فوری!</b>\n\n"
                             f"💰 <b>{sym}</b> — {arrow}\n"
-                            f"👤 ارسال‌کننده: <b>{sender_name}</b>\n\n"
+                            f"👤 ارسال‌کننده: <b>{sender_name}</b>  {hashtag}\n\n"
                             f"📊 قیمت لحظه‌ای: <b>{price_text}</b>"
                             f"{cmt}\n\n⏰ {now_pretty()} (تهران)"
                         )
@@ -1291,10 +1292,11 @@ def check_alerts():
                         cmt = f"\n💬 <i>{comment}</i>" if comment else ""
                         dist = calc_dist_str(sym, atype, cur, tgt)
                         private_label = "\n\n🔒 <i>آلارم شخصی — فقط برای شما ارسال شده</i>" if a.get("is_private") else ""
+                        hashtag = "#" + re.sub(r'[^\w]', '_', creator).strip('_')
                         fired_msg = (
                             f"🚨 <b>آلارم قیمت!</b>\n\n"
                             f"💰 <b>{sym}</b> — {arrow}\n"
-                            f"👤 ارسال‌کننده: <b>{creator}</b>\n\n"
+                            f"👤 ارسال‌کننده: <b>{creator}</b>  {hashtag}\n\n"
                             f"🎯 هدف: <code>{fmt_price(tgt,sym)}</code>\n"
                             f"📊 قیمت لحظه‌ای: <b>{fmt_price(cur,sym)}</b>\n"
                             f"📏 فاصله: <b>{dist}</b>"
@@ -1788,12 +1790,12 @@ def instant_alert():
     arrow = "📈 ناحیه سل" if condition == "above" else "📉 ناحیه بای"
     cmt = f"\n💬 <i>{comment}</i>" if comment else ""
     price_text = fmt_price(cur, sym) if cur else "—"
-    tp_text = f"\n🎯 قیمت هدف: <code>{fmt_price(target_price, sym)}</code>" if target_price else ""
-    alert_title = "آلارم قیمت" if target_price else "آلارم فوری"
+    _creator = creator or 'سیستم'
+    hashtag = "#" + re.sub(r'[^\w]', '_', _creator).strip('_')
     out_msg = (
-        f"🚨 <b>{alert_title}!</b>\n\n"
+        f"🚨 <b>{'آلارم قیمت' if target_price else 'آلارم فوری'}!</b>\n\n"
         f"💰 <b>{sym}</b> — {arrow}\n"
-        f"👤 ارسال‌کننده: <b>{creator or 'سیستم'}</b>\n\n"
+        f"👤 ارسال‌کننده: <b>{_creator}</b>  {hashtag}\n\n"
         + (f"🎯 هدف: <code>{fmt_price(target_price, sym)}</code>\n" if target_price else "")
         + f"📊 قیمت لحظه‌ای: <b>{price_text}</b>"
         f"{cmt}\n\n⏰ {now_pretty()} (تهران)"
