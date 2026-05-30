@@ -59,93 +59,190 @@ def fix_alerts(data):
             data[k] = e[k]
     return data
 
-def _sb_load_alerts():
-    """بارگذاری آلارم‌ها از Supabase - جدول alerts_store با یه ردیف ثابت id=main"""
-    if not SUPABASE_KEY:
-        return None
-    try:
-        r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/alerts_store?id=eq.main&select=data",
-            headers=_sb_h(), timeout=10)
-        if r.status_code == 200 and r.json():
-            raw = r.json()[0].get("data", "{}")
-            d = json.loads(raw) if isinstance(raw, str) else raw
-            print("[alerts] Loaded from Supabase")
-            return fix_alerts(d)
-        elif r.status_code == 200:
-            print("[alerts] Supabase: ردیف main وجود نداره")
-            return None
-        else:
-            print(f"[alerts] Supabase load failed: {r.status_code} {r.text[:80]}")
-    except Exception as e:
-        print(f"[alerts] Supabase load error: {e}")
-    return None
+# =====================================================================
+# Supabase — جدول alerts (هر آلارم یه ردیف + یه ردیف config با id='__config__')
+# =====================================================================
 
-def _sb_save_alerts(data):
-    """ذخیره آلارم‌ها در Supabase - upsert ردیف id=main"""
-    if not SUPABASE_KEY:
-        return
+def _sb_upsert_alert(a):
+    """یه آلارم رو upsert کن"""
+    if not SUPABASE_KEY: return
     try:
-        payload = {"id": "main", "data": json.dumps(data, ensure_ascii=False), "updated_at": now_teh()}
+        payload = {
+            "id":           a["id"],
+            "symbol":       a.get("symbol",""),
+            "type":         a.get("type","forex"),
+            "condition":    a.get("condition","above"),
+            "target_price": float(a.get("target_price",0)),
+            "status":       "fired" if a.get("fired_at") else ("active" if a.get("active") else "cancelled"),
+            "created_by":   a.get("created_by",""),
+            "created_at":   a.get("created_at", now_teh()),
+            "comment":      a.get("comment",""),
+            "is_private":   bool(a.get("is_private", False)),
+            "notify_only":  str(a.get("notify_only","")) if a.get("notify_only") else None,
+            "active":       bool(a.get("active", True)),
+            "last_price":   float(a["last_price"]) if a.get("last_price") is not None else None,
+            "last_checked": a.get("last_checked"),
+            "fired_at":     a.get("fired_at"),
+            "fired_price":  float(a["fired_price"]) if a.get("fired_price") is not None else None,
+        }
         r = requests.post(
-            f"{SUPABASE_URL}/rest/v1/alerts_store",
+            f"{SUPABASE_URL}/rest/v1/alerts",
             headers={**_sb_h(), "Prefer": "resolution=merge-duplicates,return=minimal"},
             json=payload, timeout=10)
-        if r.status_code in (200, 201, 204):
-            print("[alerts] Saved to Supabase")
-        else:
-            print(f"[alerts] Supabase save failed: {r.status_code} {r.text[:80]}")
+        if r.status_code not in (200,201,204):
+            print(f"[alerts] upsert {a['id']}: {r.status_code} {r.text[:80]}")
     except Exception as e:
-        print(f"[alerts] Supabase save error: {e}")
+        print(f"[alerts] upsert error: {e}")
+
+def _sb_upsert_config(tg, users, errors):
+    """config (token + chat_ids + users) رو توی یه ردیف ثابت ذخیره کن"""
+    if not SUPABASE_KEY: return
+    try:
+        payload = {
+            "id": "__config__",
+            "symbol": "__config__",
+            "type": "config",
+            "condition": "none",
+            "target_price": 0,
+            "telegram_token": tg.get("bot_token",""),
+            "chat_ids": tg.get("chat_ids", []),
+            "users": users,
+            "active": False,
+        }
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/alerts",
+            headers={**_sb_h(), "Prefer": "resolution=merge-duplicates,return=minimal"},
+            json=payload, timeout=10)
+        if r.status_code not in (200,201,204):
+            print(f"[alerts] config save: {r.status_code} {r.text[:80]}")
+    except Exception as e:
+        print(f"[alerts] config save error: {e}")
+
+def _sb_load_all_alerts():
+    """همه ردیف‌های جدول alerts رو بخون و به فرمت داخلی تبدیل کن"""
+    if not SUPABASE_KEY: return None
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/alerts?select=*&limit=2000",
+            headers=_sb_h(), timeout=10)
+        if r.status_code != 200:
+            print(f"[alerts] load failed: {r.status_code} {r.text[:80]}")
+            return None
+        rows = r.json()
+        if not rows:
+            print("[alerts] Supabase: جدول خالیه")
+            return None
+
+        config_row = next((x for x in rows if x["id"] == "__config__"), None)
+        tg = {"bot_token": "", "chat_ids": []}
+        users = []
+        if config_row:
+            tg["bot_token"] = config_row.get("telegram_token","") or ""
+            raw_cids = config_row.get("chat_ids") or []
+            tg["chat_ids"] = raw_cids if isinstance(raw_cids, list) else json.loads(raw_cids)
+            raw_users = config_row.get("users") or []
+            users = raw_users if isinstance(raw_users, list) else json.loads(raw_users)
+
+        alerts = []
+        archive = []
+        for row in rows:
+            if row["id"] == "__config__": continue
+            a = {
+                "id":           row["id"],
+                "symbol":       row.get("symbol",""),
+                "type":         row.get("type","forex"),
+                "condition":    row.get("condition","above"),
+                "target_price": row.get("target_price",0),
+                "created_by":   row.get("created_by",""),
+                "created_at":   row.get("created_at",""),
+                "comment":      row.get("comment",""),
+                "is_private":   row.get("is_private", False),
+                "notify_only":  row.get("notify_only"),
+                "active":       row.get("active", True),
+                "last_price":   row.get("last_price"),
+                "last_checked": row.get("last_checked"),
+                "fired_at":     row.get("fired_at"),
+                "fired_price":  row.get("fired_price"),
+            }
+            status = row.get("status","active")
+            if status == "fired" or row.get("fired_at"):
+                archive.append(a)
+            elif status == "active" and row.get("active"):
+                alerts.append(a)
+
+        data = {"alerts": alerts, "archive": archive, "telegram": tg,
+                "users": users, "errors": [], "last_update": now_teh()}
+        print(f"[alerts] Loaded from Supabase — {len(alerts)} active, {len(archive)} archived")
+        return data
+    except Exception as e:
+        print(f"[alerts] load error: {e}")
+        return None
+
+def _migrate_gist_to_supabase():
+    """یه‌بار: داده قدیمی Gist رو به Supabase منتقل کن"""
+    if not (GIST_ID_ALERTS and GIST_TOKEN): return None
+    try:
+        print(f"[alerts] Migrating from Gist...")
+        r = requests.get(f"https://api.github.com/gists/{GIST_ID_ALERTS}",
+                         headers={"Authorization": f"token {GIST_TOKEN}"}, timeout=10)
+        if r.status_code != 200: return None
+        content = r.json()["files"].get(ALERTS_FILE, {}).get("content","")
+        if not content: return None
+        data = fix_alerts(json.loads(content))
+        # همه آلارم‌ها و آرشیو رو migrate کن
+        for a in data.get("alerts",[]) + data.get("archive",[]):
+            _sb_upsert_alert(a)
+        _sb_upsert_config(data.get("telegram",{}), data.get("users",[]), data.get("errors",[]))
+        print(f"[alerts] Migration done — {len(data.get('alerts',[]))} active, {len(data.get('archive',[]))} archived")
+        return data
+    except Exception as e:
+        print(f"[alerts] migration error: {e}")
+        return None
 
 def load_alerts():
     global _cache_alerts
     if _cache_alerts is not None:
         return _cache_alerts
     # 1. Supabase
-    d = _sb_load_alerts()
+    d = _sb_load_all_alerts()
     if d is not None:
         _cache_alerts = d
         return _cache_alerts
-    # 2. fallback: Gist
-    if GIST_ID_ALERTS and GIST_TOKEN:
-        try:
-            print(f"[alerts] Loading from Gist {GIST_ID_ALERTS}...")
-            r = requests.get(f"https://api.github.com/gists/{GIST_ID_ALERTS}",
-                             headers={"Authorization": f"token {GIST_TOKEN}"}, timeout=10)
-            if r.status_code == 200:
-                content = r.json()["files"][ALERTS_FILE]["content"]
-                _cache_alerts = fix_alerts(json.loads(content))
-                print(f"[alerts] Loaded from Gist (migrating to Supabase...)")
-                _sb_save_alerts(_cache_alerts)
-                return _cache_alerts
-            else:
-                print(f"[alerts] Gist read failed: {r.status_code}")
-        except Exception as e:
-            print(f"[alerts] Gist exception: {e}")
-    # 3. fallback: local file
+    # 2. Gist — migrate یه‌بار
+    d = _migrate_gist_to_supabase()
+    if d is not None:
+        _cache_alerts = d
+        return _cache_alerts
+    # 3. local fallback
     if os.path.exists(ALERTS_FILE):
         try:
             with open(ALERTS_FILE, "r", encoding="utf-8") as f:
                 _cache_alerts = fix_alerts(json.load(f))
-                print(f"[alerts] Loaded from local file")
                 return _cache_alerts
-        except Exception as e:
-            print(f"[alerts] Local error: {e}")
+        except: pass
     _cache_alerts = _empty_alerts()
     return _cache_alerts
 
 def save_alerts(data):
+    """ذخیره کامل — config + همه آلارم‌های active"""
     global _cache_alerts
     _cache_alerts = data
-    # 1. Supabase - اصلی
-    _sb_save_alerts(data)
-    # 2. local backup
+    if SUPABASE_KEY:
+        # config
+        _sb_upsert_config(data.get("telegram",{}), data.get("users",[]), data.get("errors",[]))
+        # فقط آلارم‌های active رو آپدیت کن (fired‌ها قبلاً upsert شدن)
+        for a in data.get("alerts",[]):
+            _sb_upsert_alert(a)
+    # local backup
     try:
         with open(ALERTS_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
     except Exception as e:
         print(f"[alerts] local backup error: {e}")
+
+def save_alert_fired(a):
+    """وقتی آلارم fire میشه — فقط همون ردیف رو آپدیت کن"""
+    _sb_upsert_alert(a)
 
 # =====================================================================
 # Supabase
@@ -1180,6 +1277,8 @@ def check_alerts():
                             send_tg_keyboard(token, priv_cid, fired_msg, kb)
                         else:
                             broadcast(token, notify_cids, fired_msg)
+                        # فوری توی Supabase آپدیت کن
+                        save_alert_fired(a)
             if fired:
                 arch = data.get("archive", [])
                 for fid in fired:
