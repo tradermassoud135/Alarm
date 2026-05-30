@@ -223,22 +223,42 @@ def load_alerts():
     _cache_alerts = _empty_alerts()
     return _cache_alerts
 
+def _sb_delete_alert(aid):
+    """یه آلارم رو از Supabase حذف کن"""
+    if not SUPABASE_KEY: return
+    try:
+        r = requests.delete(
+            f"{SUPABASE_URL}/rest/v1/alerts?id=eq.{aid}",
+            headers=_sb_h(), timeout=8)
+        if r.status_code not in (200,204):
+            print(f"[alerts] delete {aid}: {r.status_code}")
+    except Exception as e:
+        print(f"[alerts] delete error: {e}")
+
 def save_alerts(data):
-    """ذخیره کامل — config + همه آلارم‌های active"""
+    """cache رو آپدیت کن + local backup — Supabase رو در background بزن"""
     global _cache_alerts
     _cache_alerts = data
-    if SUPABASE_KEY:
-        # config
-        _sb_upsert_config(data.get("telegram",{}), data.get("users",[]), data.get("errors",[]))
-        # فقط آلارم‌های active رو آپدیت کن (fired‌ها قبلاً upsert شدن)
-        for a in data.get("alerts",[]):
-            _sb_upsert_alert(a)
-    # local backup
+    # local backup سریع
     try:
         with open(ALERTS_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
     except Exception as e:
         print(f"[alerts] local backup error: {e}")
+    # Supabase در background — بلاک نمیشه
+    if SUPABASE_KEY:
+        snapshot = (
+            data.get("telegram",{}),
+            data.get("users",[]),
+            data.get("errors",[]),
+            list(data.get("alerts",[]))
+        )
+        def _bg(snap=snapshot):
+            tg, users, errors, alerts = snap
+            _sb_upsert_config(tg, users, errors)
+            for a in alerts:
+                _sb_upsert_alert(a)
+        threading.Thread(target=_bg, daemon=True).start()
 
 def save_alert_fired(a):
     """وقتی آلارم fire میشه — فقط همون ردیف رو آپدیت کن"""
@@ -813,8 +833,9 @@ def poll_telegram():
                         before = len(d["alerts"])
                         d["alerts"] = [a for a in d["alerts"] if a["id"] != aid]
                         if len(d["alerts"]) < before:
-                            save_alerts(d)
+                            _cache_alerts = d  # cache آپدیت
                             answer_callback(token_cbq, cbq_id, "✅ آلارم حذف شد")
+                            threading.Thread(target=_sb_delete_alert, args=(aid,), daemon=True).start()
                         else:
                             answer_callback(token_cbq, cbq_id, "⚠️ آلارم پیدا نشد")
                         # آپدیت لیست
@@ -1693,7 +1714,9 @@ def add_alert():
 def del_alert(aid):
     data = load_alerts()
     data["alerts"] = [a for a in data.get("alerts", []) if a["id"] != aid]
-    save_alerts(data)
+    global _cache_alerts
+    _cache_alerts = data
+    threading.Thread(target=_sb_delete_alert, args=(aid,), daemon=True).start()
     return jsonify({"ok": True})
 
 @app.route("/api/archive", methods=["GET"])
