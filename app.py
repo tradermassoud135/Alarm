@@ -1,4 +1,5 @@
 import os, json, time, threading, requests, pytz
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from flask import Flask, request, jsonify, send_from_directory
 from datetime import datetime, timedelta
 from groq import Groq
@@ -58,10 +59,55 @@ def fix_alerts(data):
             data[k] = e[k]
     return data
 
+def _sb_load_alerts():
+    """بارگذاری آلارم‌ها از Supabase - جدول alerts_store با یه ردیف ثابت id=main"""
+    if not SUPABASE_KEY:
+        return None
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/alerts_store?id=eq.main&select=data",
+            headers=_sb_h(), timeout=10)
+        if r.status_code == 200 and r.json():
+            raw = r.json()[0].get("data", "{}")
+            d = json.loads(raw) if isinstance(raw, str) else raw
+            print("[alerts] Loaded from Supabase")
+            return fix_alerts(d)
+        elif r.status_code == 200:
+            print("[alerts] Supabase: ردیف main وجود نداره")
+            return None
+        else:
+            print(f"[alerts] Supabase load failed: {r.status_code} {r.text[:80]}")
+    except Exception as e:
+        print(f"[alerts] Supabase load error: {e}")
+    return None
+
+def _sb_save_alerts(data):
+    """ذخیره آلارم‌ها در Supabase - upsert ردیف id=main"""
+    if not SUPABASE_KEY:
+        return
+    try:
+        payload = {"id": "main", "data": json.dumps(data, ensure_ascii=False), "updated_at": now_teh()}
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/alerts_store",
+            headers={**_sb_h(), "Prefer": "resolution=merge-duplicates,return=minimal"},
+            json=payload, timeout=10)
+        if r.status_code in (200, 201, 204):
+            print("[alerts] Saved to Supabase")
+        else:
+            print(f"[alerts] Supabase save failed: {r.status_code} {r.text[:80]}")
+    except Exception as e:
+        print(f"[alerts] Supabase save error: {e}")
+
 def load_alerts():
     global _cache_alerts
     if _cache_alerts is not None:
         return _cache_alerts
+    # 1. Supabase
+    d = _sb_load_alerts()
+    if d is not None:
+        _cache_alerts = d
+        return _cache_alerts
+    # 2. fallback: Gist
     if GIST_ID_ALERTS and GIST_TOKEN:
         try:
             print(f"[alerts] Loading from Gist {GIST_ID_ALERTS}...")
@@ -70,17 +116,19 @@ def load_alerts():
             if r.status_code == 200:
                 content = r.json()["files"][ALERTS_FILE]["content"]
                 _cache_alerts = fix_alerts(json.loads(content))
-                print(f"[alerts] Loaded from Gist")
+                print(f"[alerts] Loaded from Gist (migrating to Supabase...)")
+                _sb_save_alerts(_cache_alerts)
                 return _cache_alerts
             else:
                 print(f"[alerts] Gist read failed: {r.status_code}")
         except Exception as e:
-            print(f"[alerts] Exception: {e}")
+            print(f"[alerts] Gist exception: {e}")
+    # 3. fallback: local file
     if os.path.exists(ALERTS_FILE):
         try:
             with open(ALERTS_FILE, "r", encoding="utf-8") as f:
                 _cache_alerts = fix_alerts(json.load(f))
-                print(f"[alerts] Loaded from local")
+                print(f"[alerts] Loaded from local file")
                 return _cache_alerts
         except Exception as e:
             print(f"[alerts] Local error: {e}")
@@ -90,20 +138,14 @@ def load_alerts():
 def save_alerts(data):
     global _cache_alerts
     _cache_alerts = data
-    if GIST_ID_ALERTS and GIST_TOKEN:
-        try:
-            r = requests.patch(f"https://api.github.com/gists/{GIST_ID_ALERTS}",
-                               headers={"Authorization": f"token {GIST_TOKEN}"},
-                               json={"files": {ALERTS_FILE: {"content": json.dumps(data, indent=2, ensure_ascii=False)}}},
-                               timeout=10)
-            if r.status_code == 200:
-                print(f"[alerts] Saved to Gist")
-            else:
-                print(f"[alerts] Gist save failed: {r.status_code}")
-        except Exception as e:
-            print(f"[alerts] Exception: {e}")
-    with open(ALERTS_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    # 1. Supabase - اصلی
+    _sb_save_alerts(data)
+    # 2. local backup
+    try:
+        with open(ALERTS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"[alerts] local backup error: {e}")
 
 # =====================================================================
 # Supabase
@@ -1015,6 +1057,22 @@ def poll_telegram():
 notified = set()
 _loop_count = 0
 
+_price_fetch_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="price_fetch")
+PRICE_FETCH_TIMEOUT = 15  # ثانیه — اگه یه API بیشتر از این طول کشید، skip میشه
+
+def _fetch_with_timeout(fn, *args, timeout=PRICE_FETCH_TIMEOUT):
+    """یه تابع price رو با timeout مستقل اجرا کن"""
+    future = _price_fetch_executor.submit(fn, *args)
+    try:
+        return future.result(timeout=timeout)
+    except FuturesTimeoutError:
+        print(f"[check] ⚠️ price fetch timeout ({timeout}s): {args}")
+        future.cancel()
+        return None
+    except Exception as e:
+        print(f"[check] price fetch error: {e}")
+        return None
+
 def check_alerts():
     global _loop_count
     while True:
@@ -1039,14 +1097,30 @@ def check_alerts():
                     due_forex.append(sym)
                 else:
                     due_crypto.append(sym)
+
             price_map = {}
+
+            # forex: یه batch call با timeout
             if due_forex:
-                batch = get_forex_prices_batch(due_forex)
-                for sym, p in batch.items():
-                    price_map[(sym, "forex")] = p
-            for sym in due_crypto:
-                p = get_crypto_price(sym)
-                price_map[(sym.upper(), "crypto")] = p
+                batch = _fetch_with_timeout(get_forex_prices_batch, due_forex)
+                if batch:
+                    for sym, p in batch.items():
+                        price_map[(sym, "forex")] = p
+
+            # crypto: همزمان، هر کدوم timeout مستقل
+            if due_crypto:
+                unique_crypto = list(dict.fromkeys(s.upper() for s in due_crypto))
+                futures_map = {sym: _price_fetch_executor.submit(get_crypto_price, sym) for sym in unique_crypto}
+                for sym, fut in futures_map.items():
+                    try:
+                        p = fut.result(timeout=PRICE_FETCH_TIMEOUT)
+                        price_map[(sym, "crypto")] = p
+                    except FuturesTimeoutError:
+                        print(f"[check] ⚠️ crypto timeout: {sym}")
+                        fut.cancel()
+                    except Exception as e:
+                        print(f"[check] crypto error {sym}: {e}")
+
             print(f"[check] loop={_loop_count} forex_open={forex_open} due_f={len(due_forex)} due_c={len(due_crypto)} prices={len(price_map)}")
             fired = []
             now = now_teh()
