@@ -11,9 +11,6 @@ VERSION = "8.0"
 TEHRAN = pytz.timezone("Asia/Tehran")
 
 # ==================== متغیرهای محیطی ====================
-GIST_TOKEN = os.environ.get("GIST_TOKEN", "")
-GIST_ID_ALERTS = os.environ.get("GIST_ID", "")
-GIST_ID_JOURNAL = os.environ.get("GIST_ID_JOURNAL", "")
 ALERTS_FILE = "alerts.json"
 JOURNAL_FILE = "journal_data.json"
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
@@ -178,26 +175,7 @@ def _sb_load_all_alerts():
         print(f"[alerts] load error: {e}")
         return None
 
-def _migrate_gist_to_supabase():
-    """یه‌بار: داده قدیمی Gist رو به Supabase منتقل کن"""
-    if not (GIST_ID_ALERTS and GIST_TOKEN): return None
-    try:
-        print(f"[alerts] Migrating from Gist...")
-        r = requests.get(f"https://api.github.com/gists/{GIST_ID_ALERTS}",
-                         headers={"Authorization": f"token {GIST_TOKEN}"}, timeout=10)
-        if r.status_code != 200: return None
-        content = r.json()["files"].get(ALERTS_FILE, {}).get("content","")
-        if not content: return None
-        data = fix_alerts(json.loads(content))
-        # همه آلارم‌ها و آرشیو رو migrate کن
-        for a in data.get("alerts",[]) + data.get("archive",[]):
-            _sb_upsert_alert(a)
-        _sb_upsert_config(data.get("telegram",{}), data.get("users",[]), data.get("errors",[]))
-        print(f"[alerts] Migration done — {len(data.get('alerts',[]))} active, {len(data.get('archive',[]))} archived")
-        return data
-    except Exception as e:
-        print(f"[alerts] migration error: {e}")
-        return None
+
 
 def load_alerts():
     global _cache_alerts
@@ -208,12 +186,7 @@ def load_alerts():
     if d is not None:
         _cache_alerts = d
         return _cache_alerts
-    # 2. Gist — migrate یه‌بار
-    d = _migrate_gist_to_supabase()
-    if d is not None:
-        _cache_alerts = d
-        return _cache_alerts
-    # 3. local fallback
+    # 2. local fallback
     if os.path.exists(ALERTS_FILE):
         try:
             with open(ALERTS_FILE, "r", encoding="utf-8") as f:
@@ -324,20 +297,6 @@ def load_journal():
         except Exception as e:
             print(f"[JOURNAL:LOAD] Supabase error: {e}")
 
-    # fallback Gist
-    if GIST_ID_JOURNAL and GIST_TOKEN:
-        try:
-            r = requests.get(f"https://api.github.com/gists/{GIST_ID_JOURNAL}",
-                             headers={"Authorization": f"token {GIST_TOKEN}"}, timeout=10)
-            if r.status_code == 200:
-                files = r.json().get("files", {})
-                if JOURNAL_FILE in files:
-                    _cache_journal = json.loads(files[JOURNAL_FILE]["content"])
-                    if not isinstance(_cache_journal, list): _cache_journal = []
-                    print(f"[JOURNAL:LOAD] ✅ {len(_cache_journal)} ترید از Gist")
-                    return _cache_journal
-        except Exception as e:
-            print(f"[JOURNAL:LOAD] Gist error: {e}")
 
     _cache_journal = []
     return _cache_journal
@@ -3874,9 +3833,6 @@ def update_watching_trade():
 
 print("=" * 60)
 print(f"[STARTUP] 🚀 سرور در حال راه‌اندازی...")
-print(f"[STARTUP] GIST_TOKEN: {'✅ موجود' if GIST_TOKEN else '❌ ندارد'}")
-print(f"[STARTUP] GIST_ID_JOURNAL: {'✅ ' + GIST_ID_JOURNAL[:8] + '...' if GIST_ID_JOURNAL else '❌ ندارد'}")
-print(f"[STARTUP] GIST_ID_ALERTS: {'✅ موجود' if GIST_ID_ALERTS else '❌ ندارد'}")
 print(f"[STARTUP] GROQ_API_KEY: {'✅ موجود' if GROQ_API_KEY else '❌ ندارد'}")
 _init_journal = load_journal()
 print(f"[STARTUP] ✅ journal لود شد — {len(_init_journal)} ترید")
