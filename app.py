@@ -538,9 +538,64 @@ def answer_callback(token, callback_id, text=""):
     except: pass
 
 # ── reminder state ─────────────────────────────────────────────
-# { cid: { "sym": str, "interval": int(sec), "timer": Timer } }
-# _reminders = { cid: { sym: {"interval": int, "active": bool} } }
+# memory: { cid: { sym: {"interval": int, "active": bool} } }
+# Supabase: جدول reminders — هر ردیف یه reminder فعال
 _reminders = {}
+
+# ── Supabase reminder helpers ────────────────────────────────
+def _sb_save_reminder(cid, sym, interval_sec):
+    """ذخیره یه reminder در Supabase"""
+    if not SUPABASE_KEY: return
+    rid = f"{cid}_{sym}"
+    try:
+        payload = {
+            "id": rid, "chat_id": str(cid), "symbol": sym,
+            "interval_sec": interval_sec,
+            "created_at": now_teh(), "active": True
+        }
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/reminders",
+            headers={**_sb_h(), "Prefer": "resolution=merge-duplicates,return=minimal"},
+            json=payload, timeout=8)
+        if r.status_code not in (200,201,204):
+            print(f"[reminder] save error: {r.status_code} {r.text[:60]}")
+    except Exception as e:
+        print(f"[reminder] save exc: {e}")
+
+def _sb_delete_reminder(cid, sym):
+    """حذف یه reminder از Supabase"""
+    if not SUPABASE_KEY: return
+    rid = f"{cid}_{sym}"
+    try:
+        requests.delete(
+            f"{SUPABASE_URL}/rest/v1/reminders?id=eq.{rid}",
+            headers=_sb_h(), timeout=8)
+    except Exception as e:
+        print(f"[reminder] delete exc: {e}")
+
+def _sb_delete_all_reminders(cid):
+    """حذف همه reminder‌های یه کاربر از Supabase"""
+    if not SUPABASE_KEY: return
+    try:
+        requests.delete(
+            f"{SUPABASE_URL}/rest/v1/reminders?chat_id=eq.{cid}",
+            headers=_sb_h(), timeout=8)
+    except Exception as e:
+        print(f"[reminder] delete_all exc: {e}")
+
+def _sb_load_reminders():
+    """لود همه reminder‌های فعال از Supabase — برای startup"""
+    if not SUPABASE_KEY: return []
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/reminders?active=eq.true&select=*",
+            headers=_sb_h(), timeout=10)
+        if r.status_code == 200:
+            return r.json()
+        print(f"[reminder] load error: {r.status_code}")
+    except Exception as e:
+        print(f"[reminder] load exc: {e}")
+    return []
 
 def _delete_msg_after(token, cid, msg_id, delay=120):
     """پیام رو بعد از delay ثانیه پاک کن"""
@@ -569,12 +624,14 @@ def _send_reminder(token, cid, sym):
             _delete_msg_after(token, cid, mid, delay=120)
     except: pass
 
-def _schedule_reminder(token, cid, sym, interval_sec):
+def _schedule_reminder(token, cid, sym, interval_sec, persist=True):
     """هر interval_sec یه یادآوری بفرست تا کنسل نشه"""
     if cid not in _reminders:
         _reminders[cid] = {}
     _reminders[cid][sym] = {"interval": interval_sec, "active": True}
     entry = _reminders[cid][sym]
+    if persist:
+        threading.Thread(target=_sb_save_reminder, args=(cid, sym, interval_sec), daemon=True).start()
     def _loop():
         while entry.get("active") and _reminders.get(cid, {}).get(sym, {}).get("active"):
             time.sleep(interval_sec)
@@ -832,21 +889,22 @@ def poll_telegram():
                         if _reminders.get(r_cid, {}).get(r_sym):
                             _reminders[r_cid][r_sym]["active"] = False
                             del _reminders[r_cid][r_sym]
+                            threading.Thread(target=_sb_delete_reminder, args=(r_cid, r_sym), daemon=True).start()
                         answer_callback(token_cbq, cbq_id, f"✅ هر {label} یادآوری میاد")
                         edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
                             f"✅ هشدار دوره‌ای <b>{r_sym}</b> هر <b>{label}</b> فعال شد.\nبرای کنسل: /cancel_reminder", [])
                         _schedule_reminder(token_cbq, r_cid, r_sym, r_int)
 
                     elif cbq_data.startswith("cancel_reminder_one:"):
-                        # حذف یه هشدار مشخص
                         parts = cbq_data.split(":", 2)
                         r_cid = parts[1] if len(parts) > 1 else cbq_cid
                         r_sym = parts[2] if len(parts) > 2 else ""
                         if r_sym and _reminders.get(r_cid, {}).get(r_sym):
                             _reminders[r_cid][r_sym]["active"] = False
                             del _reminders[r_cid][r_sym]
-                            if not _reminders[r_cid]:
-                                del _reminders[r_cid]
+                            if not _reminders.get(r_cid):
+                                _reminders.pop(r_cid, None)
+                            threading.Thread(target=_sb_delete_reminder, args=(r_cid, r_sym), daemon=True).start()
                             answer_callback(token_cbq, cbq_id, f"✅ هشدار {r_sym} کنسل شد")
                         else:
                             answer_callback(token_cbq, cbq_id, "هشداری پیدا نشد")
@@ -863,6 +921,7 @@ def poll_telegram():
                             for info in _reminders[r_cid].values():
                                 info["active"] = False
                             del _reminders[r_cid]
+                            threading.Thread(target=_sb_delete_all_reminders, args=(r_cid,), daemon=True).start()
                             answer_callback(token_cbq, cbq_id, "✅ همه هشدارها کنسل شد")
                         else:
                             answer_callback(token_cbq, cbq_id, "هشداری فعال نبود")
@@ -1262,13 +1321,14 @@ def check_alerts():
                             f"{cmt}"
                             f"{private_label}\n\n⏰ {now_pretty()} (تهران)"
                         )
+                        # دکمه هشدار دوره‌ای برای همه — چه شخصی چه عمومی
+                        reminder_kb = lambda cid: [[{"text": "⏰ هشدار دوره‌ای", "callback_data": f"set_reminder:{cid}:{sym}"}]]
                         if a.get("is_private") and a.get("notify_only"):
-                            # آلارم شخصی — با دکمه تنظیم هشدار دوره‌ای
                             priv_cid = str(a["notify_only"])
-                            kb = [[{"text": "⏰ تنظیم هشدار دوره‌ای", "callback_data": f"set_reminder:{priv_cid}:{sym}"}]]
-                            send_tg_keyboard(token, priv_cid, fired_msg, kb)
+                            send_tg_keyboard(token, priv_cid, fired_msg, reminder_kb(priv_cid))
                         else:
-                            broadcast(token, notify_cids, fired_msg)
+                            for cid in notify_cids:
+                                send_tg_keyboard(token, str(cid), fired_msg, reminder_kb(str(cid)))
                         # فوری توی Supabase آپدیت کن
                         save_alert_fired(a)
             if fired:
@@ -1760,8 +1820,12 @@ def instant_alert():
         f"{cmt}\n\n⏰ {now_pretty()} (تهران)"
     )
 
-    results = [send_tg(token, cid, out_msg) for cid in targets]
-    sent_count = sum(results)
+    # هر کاربر جداگانه با دکمه هشدار دوره‌ای
+    sent_count = 0
+    for cid in targets:
+        kb = [[{"text": "⏰ هشدار دوره‌ای", "callback_data": f"set_reminder:{cid}:{sym}"}]]
+        mid = send_tg_keyboard(token, str(cid), out_msg, kb)
+        if mid: sent_count += 1
 
     # ذخیره در آرشیو
     try:
@@ -3839,6 +3903,28 @@ print(f"[STARTUP] ✅ journal لود شد — {len(_init_journal)} ترید")
 print("=" * 60)
 threading.Thread(target=check_alerts, daemon=True).start()
 print("[STARTUP] thread check_alerts شروع شد")
+
+# ── بازیابی reminder‌ها از Supabase بعد از restart ──
+def _restore_reminders():
+    """همه reminder‌های فعال رو از Supabase بخون و loop‌هاشون رو restart کن"""
+    time.sleep(5)  # صبر تا bot token آماده بشه
+    rows = _sb_load_reminders()
+    if not rows:
+        print("[STARTUP] reminder: هیچ reminder فعالی نیست")
+        return
+    token = BOT_TOKEN_ENV or load_alerts().get("telegram", {}).get("bot_token", "")
+    if not token:
+        print("[STARTUP] reminder: token نیست، restore نشد")
+        return
+    count = 0
+    for row in rows:
+        cid = str(row["chat_id"])
+        sym = row["symbol"]
+        interval_sec = int(row["interval_sec"])
+        _schedule_reminder(token, cid, sym, interval_sec, persist=False)
+        count += 1
+    print(f"[STARTUP] reminder: {count} هشدار بازیابی شد")
+threading.Thread(target=_restore_reminders, daemon=True).start()
 threading.Thread(target=daily_news_scheduler, daemon=True).start()
 print(f"[STARTUP] thread daily_news_scheduler شروع شد — ارسال ساعت {FF_NEWS_HOUR:02d}:{FF_NEWS_MINUTE:02d} تهران")
 threading.Thread(target=poll_telegram, daemon=True).start()
