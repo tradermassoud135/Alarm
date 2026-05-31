@@ -277,6 +277,7 @@ select option{background:var(--bg3)}
 #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);padding:10px 22px;border-radius:10px;font-size:13px;background:var(--bg4);border:1px solid var(--border3);color:var(--text);box-shadow:0 8px 32px rgba(0,0,0,.4);opacity:0;transition:opacity .25s;pointer-events:none;z-index:9999;font-family:var(--sans);white-space:nowrap}
 #toast.show{opacity:1}
 </style>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -399,6 +400,14 @@ select option{background:var(--bg3)}
 <div id="toast"></div>
 
 <script>
+// ── Telegram Mini App ──
+const isTWA = window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData;
+if (isTWA) {
+  const twa = window.Telegram.WebApp;
+  twa.ready();
+  twa.expand();
+  if (twa.colorScheme === 'light') document.body.classList.add('light');
+}
 const API = '';
 // ========== Theme ==========
 function initTheme() { const t = localStorage.getItem('pa_theme') || 'dark'; applyTheme(t); }
