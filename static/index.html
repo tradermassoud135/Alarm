@@ -400,8 +400,6 @@ select option{background:var(--bg3)}
 
 <script>
 const API = '';
-const HARDCODED_TOKEN = '8792456550:AAEuvnzzCUXniBhIWz6C-qabX96EvPWqN7A';
-
 // ========== Theme ==========
 function initTheme() { const t = localStorage.getItem('pa_theme') || 'dark'; applyTheme(t); }
 function applyTheme(t) { document.body.classList.toggle('light', t === 'light'); document.getElementById('theme-toggle').textContent = t === 'light' ? '☀️' : '🌙'; }
@@ -564,8 +562,6 @@ async function addAlert() {
   if (!target_price || target_price <= 0) { toast('قیمت هدف را وارد کنید'); return; }
   const btn = document.getElementById('add-btn');
   btn.textContent = '⏳'; btn.disabled = true;
-  let livePrice = null;
-  try { const rp = await fetch(`${API}/api/price/${type}/${symbol}`); const dp = await rp.json(); if (dp.price != null) livePrice = parseFloat(dp.price); } catch {}
   const r = await fetch(`${API}/api/alerts`, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -597,7 +593,7 @@ async function sendInstant() {
     const r = await fetch(`${API}/api/instant-alert`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ symbol, type, target_price, condition, comment, creator, only_me: true })
+      body: JSON.stringify({ symbol, type, target_price, condition, comment, creator })
     });
     const d = await r.json();
     if (d.ok) {
@@ -828,18 +824,11 @@ async function loadAlerts() {
     const alerts = await r.json();
     allAlertsData = alerts;
 
-    // fetch آلارم‌های شخصی بر اساس نام کاربر از endpoint جداگانه
+    // fetch آلارم‌های شخصی — فقط در allPrivateData نگه دار، به allAlertsData اضافه نشه
     const userName = getUserName();
     try {
       const rMy = await fetch(`${API}/api/alerts/my?name=${encodeURIComponent(userName)}`);
-      const myPrivate = await rMy.json();
-      // آلارم‌های شخصی رو به allAlertsData اضافه کن (اگه duplicate نبودن)
-      for (const pa of myPrivate) {
-        if (!allAlertsData.find(x => x.id === pa.id)) {
-          allAlertsData.push(pa);
-        }
-      }
-      allPrivateData = myPrivate;
+      allPrivateData = await rMy.json();
     } catch { allPrivateData = []; }
 
     const active = alerts.filter(a => a.active && !a.is_private);
@@ -857,10 +846,7 @@ async function loadAlerts() {
   } catch(e) { console.error('loadAlerts:', e); }
 }
 
-async function initConfig() { try { const r = await fetch(`${API}/api/config`); const d = await r.json(); if (!d.bot_token || d.bot_token !== HARDCODED_TOKEN) { await fetch(`${API}/api/config`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({bot_token: HARDCODED_TOKEN, chat_id: d.chat_id||''}) }); } document.getElementById('sc-users').textContent = d.user_count || 0; } catch {} }
-
 // ========== Initialization ==========
-initConfig();
 loadAlerts();
 setInterval(loadAlerts, 60000);
 // پس از بارگذاری صفحه، حالت نمایش را برای تب فعال (همه آلارم‌ها) بارگیری کن
