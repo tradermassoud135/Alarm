@@ -949,7 +949,7 @@ def _do_update(upd, token):
                                 json={"chat_id": cbq_cid, "message_id": cbq_msg_id},
                                 timeout=10, headers=H)
                         except: pass
-                    continue
+                    return
 
                 msg = upd.get("message", {})
                 raw_txt = msg.get("text", "") or ""
