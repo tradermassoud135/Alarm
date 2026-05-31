@@ -878,22 +878,25 @@ def poll_telegram():
                             f"⏰ هر چند وقت یادآوری بیاد برای <b>{r_sym}</b>؟", kb)
 
                     elif cbq_data.startswith("reminder_go:"):
-                        # reminder_go:cid:SYM:interval_sec
                         parts = cbq_data.split(":")
                         r_cid = parts[1] if len(parts) > 1 else cbq_cid
                         r_sym = parts[2] if len(parts) > 2 else "؟"
                         r_int = int(parts[3]) if len(parts) > 3 else 900
                         labels = {300:"۵ دقیقه", 900:"۱۵ دقیقه", 3600:"۱ ساعت", 14400:"۴ ساعت"}
                         label = labels.get(r_int, f"{r_int//60} دقیقه")
-                        # کنسل قبلی برای همین نماد اگه بود
+                        # کنسل قبلی — فقط memory، Supabase در background
                         if _reminders.get(r_cid, {}).get(r_sym):
                             _reminders[r_cid][r_sym]["active"] = False
                             del _reminders[r_cid][r_sym]
                             threading.Thread(target=_sb_delete_reminder, args=(r_cid, r_sym), daemon=True).start()
-                        answer_callback(token_cbq, cbq_id, f"✅ هر {label} یادآوری میاد")
-                        edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
-                            f"✅ هشدار دوره‌ای <b>{r_sym}</b> هر <b>{label}</b> فعال شد.\nبرای کنسل: /cancel_reminder", [])
+                        # فوری ثبت کن memory
                         _schedule_reminder(token_cbq, r_cid, r_sym, r_int)
+                        # پیام و Supabase هر دو در background
+                        def _bg_confirm(tok=token_cbq, cid_=cbq_cid, mid=cbq_msg_id, cbid=cbq_id, sym_=r_sym, lbl=label):
+                            answer_callback(tok, cbid, "✅ هر " + lbl + " یادآوری میاد")
+                            confirm_txt = "✅ هشدار دوره‌ای <b>" + sym_ + "</b> هر <b>" + lbl + "</b> فعال شد.\nبرای کنسل: /cancel_reminder"
+                            edit_tg_keyboard(tok, cid_, mid, confirm_txt, [])
+                        threading.Thread(target=_bg_confirm, daemon=True).start()
 
                     elif cbq_data.startswith("cancel_reminder_one:"):
                         parts = cbq_data.split(":", 2)
