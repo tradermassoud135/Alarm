@@ -831,9 +831,20 @@ def poll_telegram():
             if r.status_code != 200:
                 time.sleep(10)
                 continue
-            for upd in r.json().get("result", []):
+            _all_updates = r.json().get("result", [])
+            for upd in _all_updates:
                 last_id = upd["update_id"]
+            # هر update در thread جدا — poll بلاک نمیشه
+            for upd in _all_updates:
+                threading.Thread(target=_do_update, args=(upd, token), daemon=True).start()
+            continue
 
+        except Exception as e:
+            print(f"[poll] {e}")
+        time.sleep(5)
+
+def _do_update(upd, token):
+  try:
                 # ── callback query (دکمه‌های inline) ─────────────────
                 cbq = upd.get("callback_query", {})
                 if cbq:
@@ -1200,9 +1211,8 @@ def poll_telegram():
                                 if r: ok_count += 1
                             send_tg(token, cid, f"\u2705 \u067e\u06cc\u0627\u0645 \u0628\u0647 {ok_count} \u0646\u0641\u0631 \u0627\u0631\u0633\u0627\u0644 \u0634\u062f")
 
-        except Exception as e:
-            print(f"[poll] {e}")
-        time.sleep(5)
+  except Exception as e:
+    print(f"[do_update] {e}")
 
 notified = set()
 _loop_count = 0
