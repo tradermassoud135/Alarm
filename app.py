@@ -834,7 +834,7 @@ _pending_alarm = {}  # cid → {"step": str, "data": dict}
 
 # ── Reply Keyboard rows ──────────────────────────────────────
 MAIN_MENU = [
-    ["📈 آلارم جدید",  "🔒 آلارم شخصی"],
+    ["📈 آلارم جدید"],
     ["⭐ آلارم‌های من", "📊 وضعیت"],
     ["⚡ آلارم فوری",   "⏰ هشدار دوره‌ای من"],
 ]
@@ -842,7 +842,7 @@ MAIN_MENU_ADMIN = [
     ["📈 آلارم جدید",  "🔒 آلارم شخصی"],
     ["⭐ آلارم‌های من", "📊 وضعیت"],
     ["⚡ آلارم فوری",   "⏰ هشدار دوره‌ای من"],
-    ["📰 اخبار فارکس", "✉️ پیام به گروه"],
+    ["⚙️ پنل ادمین"],
 ]
 DIR_MENU = [["📈 BUY", "📉 SELL"], ["❌ انصراف"]]
 
@@ -996,6 +996,25 @@ def _do_update(upd, token):
                             answer_callback(token_cbq, cbq_id, "هشداری فعال نبود")
                         edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, "✅ همه هشدارهای دوره‌ای کنسل شدن.", [])
 
+                    elif cbq_data == "admin:news" and (cbq_cid == YOUR_CHAT_ID or BROADCAST_MODE):
+                        answer_callback(token_cbq, cbq_id, "در حال دریافت اخبار...")
+                        def _bg_news(tok=token_cbq, c=cbq_cid):
+                            result = fetch_ff_news()
+                            msg_text = result[1] if isinstance(result, tuple) else str(result)
+                            send_tg(tok, c, msg_text)
+                        threading.Thread(target=_bg_news, daemon=True).start()
+
+                    elif cbq_data == "admin:broadcast" and (cbq_cid == YOUR_CHAT_ID or BROADCAST_MODE):
+                        answer_callback(token_cbq, cbq_id)
+                        _pending_alarm[cbq_cid] = {"step": "broadcast_text", "data": {}}
+                        try:
+                            requests.post(
+                                f"https://api.telegram.org/bot{token_cbq}/deleteMessage",
+                                json={"chat_id": cbq_cid, "message_id": cbq_msg_id},
+                                timeout=10, headers=H)
+                        except: pass
+                        send_tg(token_cbq, cbq_cid, "✉️ متن پیام رو بنویس:")
+
                     elif cbq_data == "close_myalerts":
                         answer_callback(token_cbq, cbq_id, "بسته شد")
                         try:
@@ -1120,12 +1139,15 @@ def _do_update(upd, token):
                     else:
                         show_main_menu(token, cid, text_msg2, is_adm)
 
-                elif txt == "📰 اخبار فارکس" and (cid == YOUR_CHAT_ID or BROADCAST_MODE):
-                    threading.Thread(target=lambda: send_tg(token, cid, fetch_ff_news()), daemon=True).start()
+                elif txt == "⚙️ پنل ادمین" and (cid == YOUR_CHAT_ID or BROADCAST_MODE):
+                    admin_kb = [
+                        [{"text": "📰 اخبار فارکس",  "callback_data": "admin:news"}],
+                        [{"text": "✉️ پیام به گروه", "callback_data": "admin:broadcast"}],
+                        [{"text": "✕ بستن",           "callback_data": "close_myalerts"}],
+                    ]
+                    send_tg_keyboard(token, cid,
+                        "⚙️ <b>پنل ادمین</b>\n\nیه گزینه انتخاب کن:", admin_kb)
 
-                elif txt == "✉️ پیام به گروه" and (cid == YOUR_CHAT_ID or BROADCAST_MODE):
-                    _pending_alarm[cid] = {"step": "broadcast_text", "data": {}}
-                    remove_reply_keyboard(token, cid, "✉️ متن پیام رو بنویس:")
 
                 elif txt == "❌ انصراف":
                     _pending_alarm.pop(cid, None)
@@ -1139,10 +1161,14 @@ def _do_update(upd, token):
                         "<code>EURUSD</code>  <code>XAUUSD</code>  <code>BTC</code>")
 
                 elif txt == "🔒 آلارم شخصی":
-                    _pending_alarm[cid] = {"step": "alarm_symbol", "data": {"ptype": "private"}}
-                    remove_reply_keyboard(token, cid,
-                        "🔒 <b>آلارم شخصی</b> — مرحله ۱/۴\n\nنماد را بنویس:\n"
-                        "<code>EURUSD</code>  <code>XAUUSD</code>  <code>BTC</code>")
+                    if cid != YOUR_CHAT_ID and not BROADCAST_MODE:
+                        is_adm = False
+                        show_main_menu(token, cid, "⚠️ این قابلیت فعلاً در دسترس نیست.", is_adm)
+                    else:
+                        _pending_alarm[cid] = {"step": "alarm_symbol", "data": {"ptype": "private"}}
+                        remove_reply_keyboard(token, cid,
+                            "🔒 <b>آلارم شخصی</b> — مرحله ۱/۴\n\nنماد را بنویس:\n"
+                            "<code>EURUSD</code>  <code>XAUUSD</code>  <code>BTC</code>")
 
                 elif txt == "⚡ آلارم فوری" and (cid == YOUR_CHAT_ID or BROADCAST_MODE):
                     _pending_alarm[cid] = {"step": "sos_symbol", "data": {}}
@@ -1365,62 +1391,64 @@ def _do_update(upd, token):
                                 except: pass
                             threading.Thread(target=_bg_price, daemon=True).start()
 
-                # ── /mealarm — آلارم شخصی (فقط برای خود فرستنده) ───
+                # ── /mealarm — آلارم شخصی (فعلاً فقط ادمین) ───
                 elif txt.startswith("/mealarm"):
-                    parts = txt.split(maxsplit=4)
-                    if len(parts) < 4:
-                        send_tg(token, cid,
-                            "⚠️ فرمت:\n<code>/mealarm SYMBOL buy|sell PRICE [کامنت]</code>\n\n"
-                            "مثال:\n"
-                            "<code>/mealarm xauusd sell 2350 ناحیه شخصی</code>\n\n"
-                            "این آلارم فقط برای شما ثبت میشه و بقیه نمیبینن.")
+                    if cid != YOUR_CHAT_ID and not BROADCAST_MODE:
+                        send_tg(token, cid, "⚠️ این قابلیت فعلاً در دسترس نیست.")
                     else:
-                        sym = parts[1].upper().replace("/", "")
-                        raw_dir = parts[2].lower()
-                        raw_price = parts[3]
-                        comment = parts[4] if len(parts) > 4 else ""
-                        condition = "above" if raw_dir in ("sell","s","سل","above") else "below"
-                        atype = "forex" if any(x in sym for x in ["EUR","GBP","JPY","XAU","XAG","CHF","CAD","AUD","NZD"]) else "crypto"
-                        sender_name = _get_sender_name(msg)
-                        tgt_f = None
-                        try:
-                            tgt_f = float(raw_price)
-                        except ValueError:
-                            send_tg(token, cid, f"❌ قیمت نامعتبر: <code>{raw_price}</code>")
-                        if tgt_f is not None:
-                            arrow = "سل 📈" if condition == "above" else "بای 📉"
-                            new_alert = {
-                                "id": str(int(time.time()*1000)),
-                                "symbol": sym, "type": atype,
-                                "target_price": tgt_f, "condition": condition,
-                                "comment": comment, "created_by": sender_name,
-                                "active": True, "last_price": None,
-                                "last_checked": None,
-                                "created_at": now_teh(),
-                                "notify_only": cid,
-                                "private_cid": cid,
-                                "is_private": True
-                            }
-                            d = load_alerts()
-                            d["alerts"].append(new_alert)
-                            _sb_upsert_alert(new_alert)
-                            _cache_alerts = d
+                        parts = txt.split(maxsplit=4)
+                        if len(parts) < 4:
                             send_tg(token, cid,
-                                f"✅ <b>آلارم شخصی ثبت شد</b>\n\n"
-                                f"💰 <b>{sym}</b> — {arrow}\n"
-                                f"🎯 هدف: <code>{fmt_price(tgt_f, sym)}</code>"
-                                + (f"\n💬 <i>{comment}</i>" if comment else "") +
-                                f"\n\n🔒 فقط شما این آلارم رو میبینید\n⏰ {now_pretty()} (تهران)")
-                            def _bg_price_me(alert=new_alert, s=sym, t=atype):
-                                try:
-                                    cur = get_price(s, t)
-                                    if cur:
-                                        alert["last_price"] = cur
-                                        alert["last_checked"] = now_teh()
-                                        _sb_upsert_alert(alert)
-                                except: pass
-                            threading.Thread(target=_bg_price_me, daemon=True).start()
-
+                                "⚠️ فرمت:\n<code>/mealarm SYMBOL buy|sell PRICE [کامنت]</code>\n\n"
+                                "مثال:\n"
+                                "<code>/mealarm xauusd sell 2350 ناحیه شخصی</code>\n\n"
+                                "این آلارم فقط برای شما ثبت میشه و بقیه نمیبینن.")
+                        else:
+                            sym = parts[1].upper().replace("/", "")
+                            raw_dir = parts[2].lower()
+                            raw_price = parts[3]
+                            comment = parts[4] if len(parts) > 4 else ""
+                            condition = "above" if raw_dir in ("sell","s","سل","above") else "below"
+                            atype = "forex" if any(x in sym for x in ["EUR","GBP","JPY","XAU","XAG","CHF","CAD","AUD","NZD"]) else "crypto"
+                            sender_name = _get_sender_name(msg)
+                            tgt_f = None
+                            try:
+                                tgt_f = float(raw_price)
+                            except ValueError:
+                                send_tg(token, cid, f"❌ قیمت نامعتبر: <code>{raw_price}</code>")
+                            if tgt_f is not None:
+                                arrow = "سل 📈" if condition == "above" else "بای 📉"
+                                new_alert = {
+                                    "id": str(int(time.time()*1000)),
+                                    "symbol": sym, "type": atype,
+                                    "target_price": tgt_f, "condition": condition,
+                                    "comment": comment, "created_by": sender_name,
+                                    "active": True, "last_price": None,
+                                    "last_checked": None,
+                                    "created_at": now_teh(),
+                                    "notify_only": cid,
+                                    "private_cid": cid,
+                                    "is_private": True
+                                }
+                                d = load_alerts()
+                                d["alerts"].append(new_alert)
+                                _sb_upsert_alert(new_alert)
+                                _cache_alerts = d
+                                send_tg(token, cid,
+                                    f"✅ <b>آلارم شخصی ثبت شد</b>\n\n"
+                                    f"💰 <b>{sym}</b> — {arrow}\n"
+                                    f"🎯 هدف: <code>{fmt_price(tgt_f, sym)}</code>"
+                                    + (f"\n💬 <i>{comment}</i>" if comment else "") +
+                                    f"\n\n🔒 فقط شما این آلارم رو میبینید\n⏰ {now_pretty()} (تهران)")
+                                def _bg_price_me(alert=new_alert, s=sym, t=atype):
+                                    try:
+                                        cur = get_price(s, t)
+                                        if cur:
+                                            alert["last_price"] = cur
+                                            alert["last_checked"] = now_teh()
+                                            _sb_upsert_alert(alert)
+                                    except: pass
+                                threading.Thread(target=_bg_price_me, daemon=True).start()
                 # ── /news ────────────────────────────────────────────
                 elif txt.startswith("/cancel_reminder"):
                     text_msg, keyboard = build_cancel_reminder_msg(cid)
