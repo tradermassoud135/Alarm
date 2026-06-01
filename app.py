@@ -1607,10 +1607,7 @@ def _do_update(upd, token):
                 elif txt == "📈 آلارم جدید" and (cid == YOUR_CHAT_ID or BROADCAST_MODE):
                     _pending_alarm[cid] = {"step": "alarm_symbol", "data": {"ptype": "public"}}
                     send_reply_keyboard(token, cid,
-                        "📍 <b>مرحله ۱ از ۴</b> — نماد\n\n"
-                        "نماد رو بنویس:\n"
-                        "<code>EURUSD</code>  <code>XAUUSD</code>  <code>BTC</code>\n\n"
-                        "<i>مثال: XAUUSD یا BTC</i>",
+                        "اسم نماد رو بنویس:\n<code>EURUSD</code>  <code>XAUUSD</code>  <code>BTC</code>",
                         [["❌ انصراف"]])
 
                 elif txt == "🔒 آلارم شخصی":
@@ -1620,18 +1617,14 @@ def _do_update(upd, token):
                     else:
                         _pending_alarm[cid] = {"step": "alarm_symbol", "data": {"ptype": "private"}}
                         send_reply_keyboard(token, cid,
-                            "📍 <b>مرحله ۱ از ۴</b> — نماد  🔒 شخصی\n\n"
-                            "نماد رو بنویس:\n"
-                            "<code>EURUSD</code>  <code>XAUUSD</code>  <code>BTC</code>\n\n"
-                            "<i>مثال: XAUUSD یا BTC</i>",
+                            "🔒 <b>آلارم شخصی</b>\n\nاسم نماد رو بنویس:\n<code>EURUSD</code>  <code>XAUUSD</code>  <code>BTC</code>",
                             [["❌ انصراف"]])
 
 
                 elif txt == "⚡ آلارم فوری" and (cid == YOUR_CHAT_ID or BROADCAST_MODE):
                     _pending_alarm[cid] = {"step": "sos_symbol", "data": {}}
                     send_reply_keyboard(token, cid,
-                        "⚡ <b>آلارم فوری</b>\n\nنماد رو بنویس:\n"
-                        "<code>EURUSD</code>  <code>XAUUSD</code>  <code>BTC</code>",
+                        "⚡ <b>آلارم فوری</b>\n\nاسم نماد رو بنویس:\n<code>EURUSD</code>  <code>XAUUSD</code>  <code>BTC</code>",
                         [["❌ انصراف"]])
 
                 elif cid in _pending_alarm and not txt.startswith("/"):
@@ -1653,31 +1646,27 @@ def _do_update(upd, token):
                             dw["atype"]  = "forex" if any(x in sym_w for x in ["EUR","GBP","JPY","XAU","XAG","CHF","CAD","AUD","NZD"]) else "crypto"
                             _pending_alarm[cid]["step"] = "alarm_dir"
                             ptype_lbl = "🔒 شخصی" if dw.get("ptype") == "private" else "📈 عمومی"
+                            # چت رو پاک کن، یه پیام تمیز بده
+                            threading.Thread(target=delete_chat_history, args=(token, cid), daemon=True).start()
                             send_reply_keyboard(token, cid,
-                                f"📍 <b>مرحله ۲ از ۴</b> — جهت\n"
-                                f"┌─────────────────┐\n"
-                                f"│ نماد: <b>{sym_w}</b>   {ptype_lbl}\n"
-                                f"└─────────────────┘\n\n"
-                                f"جهت آلارم رو انتخاب کن:", DIR_MENU)
+                                f"<b>{sym_w}</b>  {ptype_lbl}\n\n"
+                                f"جهت رو انتخاب کن:", DIR_MENU)
 
                     elif step == "alarm_dir":
                         if txt in ("📈 BUY","BUY","buy","بای"):
                             dw["condition"] = "below"
-                            dir_lbl = "📈 BUY — صعودی"
+                            dir_lbl = "📈 BUY"
                         elif txt in ("📉 SELL","SELL","sell","سل"):
                             dw["condition"] = "above"
-                            dir_lbl = "📉 SELL — نزولی"
+                            dir_lbl = "📉 SELL"
                         else:
                             send_reply_keyboard(token, cid, "⚠️ لطفاً یکی از دکمه‌ها رو بزن:", DIR_MENU)
                             return
                         _pending_alarm[cid]["step"] = "alarm_price"
+                        threading.Thread(target=delete_chat_history, args=(token, cid), daemon=True).start()
                         send_reply_keyboard(token, cid,
-                            f"📍 <b>مرحله ۳ از ۴</b> — قیمت هدف\n"
-                            f"┌─────────────────┐\n"
-                            f"│ نماد: <b>{dw['symbol']}</b>\n"
-                            f"│ جهت:  {dir_lbl}\n"
-                            f"└─────────────────┘\n\n"
-                            f"قیمت هدف رو تایپ کن:",
+                            f"<b>{dw['symbol']}</b>  {dir_lbl}\n\n"
+                            f"قیمت هدف رو بنویس:",
                             [["❌ انصراف"]])
 
                     elif step == "alarm_price":
@@ -1685,14 +1674,10 @@ def _do_update(upd, token):
                             dw["target_price"] = float(txt.replace(",",""))
                             _pending_alarm[cid]["step"] = "alarm_comment"
                             dir_lbl2 = "📈 BUY" if dw["condition"] == "below" else "📉 SELL"
+                            threading.Thread(target=delete_chat_history, args=(token, cid), daemon=True).start()
                             send_reply_keyboard(token, cid,
-                                f"📍 <b>مرحله ۴ از ۴</b> — یادداشت\n"
-                                f"┌─────────────────────┐\n"
-                                f"│ نماد:  <b>{dw['symbol']}</b>\n"
-                                f"│ جهت:   {dir_lbl2}\n"
-                                f"│ قیمت:  <code>{fmt_price(dw['target_price'], dw['symbol'])}</code>\n"
-                                f"└─────────────────────┘\n\n"
-                                f"یادداشت اختیاری بنویس یا ثبت کن:",
+                                f"<b>{dw['symbol']}</b>  {dir_lbl2}  @  <code>{fmt_price(dw['target_price'], dw['symbol'])}</code>\n\n"
+                                f"یادداشت بنویس یا بدون یادداشت ثبت کن:",
                                 [["✅ ثبت بدون یادداشت"], ["❌ انصراف"]])
                         except ValueError:
                             send_tg(token, cid, "❌ عدد نامعتبر. مثال: <code>1.08500</code> یا <code>2350</code>")
@@ -1717,8 +1702,17 @@ def _do_update(upd, token):
                         _sb_upsert_alert(new_alert_w)
                         _cache_alerts = d2
                         del _pending_alarm[cid]
-                        # چت رو پاک کن — آلارم‌های fired دست‌نخورده می‌مونن
+                        # چت رو پاک کن و پیام تأیید بده
                         threading.Thread(target=delete_chat_history, args=(token, cid), daemon=True).start()
+                        dir_lbl_f = "📈 BUY" if new_alert_w["condition"] == "below" else "📉 SELL"
+                        priv_lbl_f = "  🔒 شخصی" if is_private_w else ""
+                        confirm_txt = (
+                            f"✅ آلارم ثبت شد{priv_lbl_f}\n\n"
+                            f"<b>{new_alert_w['symbol']}</b>  {dir_lbl_f}  @  <code>{fmt_price(new_alert_w['target_price'], new_alert_w['symbol'])}</code>"
+                            + (f"\n💬 {comment_w}" if comment_w else "")
+                        )
+                        is_adm_f = (cid == YOUR_CHAT_ID)
+                        show_main_menu(token, cid, confirm_txt, is_adm_f)
                         def _bgw(alert=new_alert_w, s=dw["symbol"], t=dw["atype"]):
                             try:
                                 cur = get_price(s, t)
@@ -1738,12 +1732,9 @@ def _do_update(upd, token):
                         else:
                             dw["symbol"] = sym_w2
                             _pending_alarm[cid]["step"] = "sos_dir"
+                            threading.Thread(target=delete_chat_history, args=(token, cid), daemon=True).start()
                             send_reply_keyboard(token, cid,
-                                f"⚡ <b>آلارم فوری</b>\n"
-                                f"┌─────────────────┐\n"
-                                f"│ نماد: <b>{sym_w2}</b>\n"
-                                f"└─────────────────┘\n\n"
-                                f"جهت رو انتخاب کن:", DIR_MENU)
+                                f"⚡ <b>آلارم فوری</b>  <b>{sym_w2}</b>\n\nجهت رو انتخاب کن:", DIR_MENU)
 
                     elif step == "sos_dir":
                         if txt in ("📈 BUY","BUY","buy","بای"):
@@ -1756,13 +1747,9 @@ def _do_update(upd, token):
                             send_reply_keyboard(token, cid, "⚠️ لطفاً یکی از دکمه‌ها رو بزن:", DIR_MENU)
                             return
                         _pending_alarm[cid]["step"] = "sos_comment"
+                        threading.Thread(target=delete_chat_history, args=(token, cid), daemon=True).start()
                         send_reply_keyboard(token, cid,
-                            f"⚡ <b>آلارم فوری</b>\n"
-                            f"┌─────────────────┐\n"
-                            f"│ نماد: <b>{dw['symbol']}</b>\n"
-                            f"│ جهت:  {dw['dir_lbl']}\n"
-                            f"└─────────────────┘\n\n"
-                            f"یادداشت اختیاری:",
+                            f"⚡ <b>{dw['symbol']}</b>  {dw['dir_lbl']}\n\nیادداشت اختیاری:",
                             [["✅ ارسال بدون یادداشت"], ["❌ انصراف"]])
 
                     elif step == "sos_comment":
@@ -1868,7 +1855,7 @@ def _do_update(upd, token):
                         except ValueError:
                             send_tg(token, cid, f"❌ قیمت نامعتبر: <code>{raw_price}</code>")
                         if tgt_f is not None:
-                            arrow = "سل 📈" if condition == "above" else "بای 📉"
+                            dir_arrow = "📈 BUY" if condition == "below" else "📉 SELL"
                             new_alert = {
                                 "id": str(int(time.time()*1000)),
                                 "symbol": sym, "type": atype,
@@ -1883,8 +1870,15 @@ def _do_update(upd, token):
                             d["alerts"].append(new_alert)
                             _sb_upsert_alert(new_alert)
                             _cache_alerts = d
-                            # چت پاک بشه
+                            # چت پاک بشه و پیام تأیید بده
                             threading.Thread(target=delete_chat_history, args=(token, cid), daemon=True).start()
+                            _is_adm_alarm = (cid == YOUR_CHAT_ID)
+                            confirm_alarm_txt = (
+                                f"✅ آلارم ثبت شد\n\n"
+                                f"<b>{sym}</b>  {dir_arrow}  @  <code>{fmt_price(tgt_f, sym)}</code>"
+                                + (f"\n💬 {comment}" if comment else "")
+                            )
+                            show_main_menu(token, cid, confirm_alarm_txt, _is_adm_alarm)
                             def _bg_price(alert=new_alert, s=sym, t=atype, tok=token, c=cid):
                                 try:
                                     cur = get_price(s, t)
@@ -1938,12 +1932,14 @@ def _do_update(upd, token):
                                 d["alerts"].append(new_alert)
                                 _sb_upsert_alert(new_alert)
                                 _cache_alerts = d
-                                send_tg(token, cid,
-                                    f"✅ <b>آلارم شخصی ثبت شد</b>\n\n"
-                                    f"💰 <b>{sym}</b> — {arrow}\n"
-                                    f"🎯 هدف: <code>{fmt_price(tgt_f, sym)}</code>"
-                                    + (f"\n💬 <i>{comment}</i>" if comment else "") +
-                                    f"\n\n🔒 فقط شما این آلارم رو میبینید\n⏰ {now_pretty()} (تهران)")
+                                _is_adm_me = (cid == YOUR_CHAT_ID)
+                                _me_dir = "📈 BUY" if condition == "below" else "📉 SELL"
+                                _me_confirm = (
+                                    f"✅ آلارم شخصی ثبت شد 🔒\n\n"
+                                    f"<b>{sym}</b>  {_me_dir}  @  <code>{fmt_price(tgt_f, sym)}</code>"
+                                    + (f"\n💬 {comment}" if comment else "")
+                                )
+                                show_main_menu(token, cid, _me_confirm, _is_adm_me)
                                 def _bg_price_me(alert=new_alert, s=sym, t=atype):
                                     try:
                                         cur = get_price(s, t)
