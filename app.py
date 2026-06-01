@@ -713,15 +713,23 @@ def build_myalerts_msg(cid):
     my = [a for a in alerts if a.get("is_private") and str(a.get("private_cid","")) == cid and a.get("active")]
     if not my:
         return "📭 هیچ آلارم شخصی فعالی نداری.", []
-    lines = ["🔒 <b>آلارم‌های شخصی تو:</b>\n"]
+    lines = ["🔒 <b>آلارم‌های شخصی تو:</b>"]
     keyboard = []
     for i, a in enumerate(my, 1):
         sym = a.get("symbol","")
         tgt = a.get("target_price",0)
-        cond = "📈 بای" if a.get("condition") == "below" else "📉 سل"
-        cmt = f" — {a['comment']}" if a.get("comment") else ""
-        lines.append(f"{i}. <b>{sym}</b> {cond} @ <code>{tgt}</code>{cmt}")
-        keyboard.append([{"text": f"🗑 حذف {sym} @ {tgt}", "callback_data": f"del_alert:{a['id']}"}])
+        cond = "📈 BUY" if a.get("condition") == "below" else "📉 SELL"
+        cur2 = a.get("last_price")
+        cur_txt = f"<code>{fmt_price(cur2, sym)}</code>" if cur2 else "—"
+        cmt = f"\n│  💬 {a['comment']}" if a.get("comment") else ""
+        lines.append(
+            f"┌─ {i}. <b>{sym}</b>  {cond}\n"
+            f"│  🎯 هدف: <code>{tgt}</code>\n"
+            f"│  💹 فعلی: {cur_txt}"
+            f"{cmt}\n"
+            f"└──────────────"
+        )
+        keyboard.append([{"text": f"🗑 حذف  {sym} @ {tgt}", "callback_data": f"del_confirm:{a['id']}"}])
     keyboard.append([{"text": "✕ بستن", "callback_data": "close_myalerts"}])
     return "\n".join(lines), keyboard
 
@@ -918,18 +926,24 @@ def _build_myalerts_section(alerts_list, title, start_idx=1):
     """ساخت متن و keyboard برای نمایش لیست آلارم"""
     if not alerts_list:
         return None, []
-    lines = [f"{title}\n━━━━━━━━━━━━━━━━━━"]
+    lines = [f"{title}"]
     kb = []
     for i, a in enumerate(alerts_list, start_idx):
         sym2  = a.get("symbol","")
         tgt2  = a.get("target_price", 0)
         cond2 = "📈 BUY" if a.get("condition") == "below" else "📉 SELL"
         cur2  = a.get("last_price")
-        cur_txt = f"  ┆ <code>{fmt_price(cur2, sym2)}</code>" if cur2 else ""
-        cmt2  = f"\n    💬 {a['comment']}" if a.get("comment") else ""
-        lines.append(f"  {i}. <b>{sym2}</b>  {cond2}\n     🎯 <code>{fmt_price(tgt2, sym2)}</code>{cur_txt}{cmt2}")
-        kb.append([{"text": f"🗑 {sym2} {cond2} @ {fmt_price(tgt2, sym2)}", "callback_data": f"del_alert:{a['id']}"}])
-    lines.append("━━━━━━━━━━━━━━━━━━")
+        cur_txt = f"<code>{fmt_price(cur2, sym2)}</code>" if cur2 else "—"
+        cmt2  = f"\n💬 {a['comment']}" if a.get("comment") else ""
+        block = (
+            f"┌─ {i}. <b>{sym2}</b>  {cond2}\n"
+            f"│  🎯 هدف: <code>{fmt_price(tgt2, sym2)}</code>\n"
+            f"│  💹 فعلی: {cur_txt}"
+            f"{cmt2}\n"
+            f"└──────────────"
+        )
+        lines.append(block)
+        kb.append([{"text": f"🗑 حذف  {sym2} {cond2} @ {fmt_price(tgt2, sym2)}", "callback_data": f"del_confirm:{a['id']}"}])
     kb.append([{"text": "✕ بستن", "callback_data": "close_myalerts"}])
     return "\n".join(lines), kb
 
@@ -971,7 +985,58 @@ def _do_update(upd, token):
                     cbq_msg_id = cbq.get("message",{}).get("message_id")
                     token_cbq, _, _ = _get_token_and_cids()
 
-                    if cbq_data.startswith("del_alert:"):
+                    if cbq_data.startswith("del_confirm:"):
+                        # مرحله اول: نمایش تأیید حذف
+                        aid = cbq_data.split(":",1)[1]
+                        d_conf = load_alerts()
+                        a_conf = next((a for a in d_conf["alerts"] if a["id"] == aid), None)
+                        answer_callback(token_cbq, cbq_id)
+                        if a_conf:
+                            sym_c = a_conf.get("symbol","")
+                            tgt_c = a_conf.get("target_price", 0)
+                            cond_c = "📈 BUY" if a_conf.get("condition") == "below" else "📉 SELL"
+                            confirm_text = (
+                                f"⚠️ <b>آیا مطمئنی؟</b>\n\n"
+                                f"میخوای این آلارم رو حذف کنی:\n"
+                                f"<b>{sym_c}</b>  {cond_c}  @ <code>{fmt_price(tgt_c, sym_c)}</code>"
+                            )
+                            confirm_kb = [
+                                [{"text": "✅ بله، حذف کن", "callback_data": f"del_alert:{aid}"}],
+                                [{"text": "❌ نه، برگرد", "callback_data": f"del_cancel:{aid}"}],
+                            ]
+                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, confirm_text, confirm_kb)
+                        else:
+                            answer_callback(token_cbq, cbq_id, "⚠️ آلارم پیدا نشد")
+
+                    elif cbq_data.startswith("del_cancel:"):
+                        # برگشت به لیست آلارم‌ها بعد از انصراف از حذف
+                        answer_callback(token_cbq, cbq_id, "❌ حذف لغو شد")
+                        d_can = load_alerts()
+                        all_a_can = d_can.get("alerts", [])
+                        custom_name_can = _get_user_custom_name(cbq_cid)
+                        pub_can  = [a for a in all_a_can if a.get("active") and not a.get("is_private") and a.get("created_by","") == custom_name_can]
+                        priv_can = [a for a in all_a_can if a.get("active") and a.get("is_private") and (
+                            str(a.get("private_cid","")) == cbq_cid or str(a.get("notify_only","")) == cbq_cid
+                        )]
+                        combined_can = pub_can + priv_can
+                        if pub_can and not priv_can:
+                            txt_can, kb_can = _build_myalerts_section(pub_can, f"🌐 <b>آلارم‌های تیمی</b>  ({len(pub_can)} مورد)")
+                        elif priv_can and not pub_can:
+                            txt_can, kb_can = _build_myalerts_section(priv_can, f"🔒 <b>آلارم‌های شخصی</b>  ({len(priv_can)} مورد)")
+                        elif combined_can:
+                            txt_can = f"📋 <b>همه آلارم‌های من</b>  ({len(combined_can)} مورد)"
+                            kb_can = []
+                            for a in combined_can:
+                                sym2 = a.get("symbol",""); tgt2 = a.get("target_price",0)
+                                cond2 = "📈 BUY" if a.get("condition") == "below" else "📉 SELL"
+                                kb_can.append([{"text":f"🗑 حذف  {sym2} {cond2} @ {fmt_price(tgt2,sym2)}","callback_data":f"del_confirm:{a['id']}"}])
+                            kb_can.append([{"text":"✕ بستن","callback_data":"close_myalerts"}])
+                        else:
+                            txt_can, kb_can = "📭 هیچ آلارم فعالی نداری.", [[{"text":"✕ بستن","callback_data":"close_myalerts"}]]
+                        edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, txt_can, kb_can)
+
+                    elif cbq_data.startswith("del_alert:"):
+                        # مرحله دوم: حذف واقعی بعد از تأیید
                         aid = cbq_data.split(":",1)[1]
                         d = load_alerts()
                         before = len(d["alerts"])
@@ -982,12 +1047,32 @@ def _do_update(upd, token):
                             threading.Thread(target=_sb_delete_alert, args=(aid,), daemon=True).start()
                         else:
                             answer_callback(token_cbq, cbq_id, "⚠️ آلارم پیدا نشد")
-                        # آپدیت لیست
-                        new_text, new_kb = build_myalerts_msg(cbq_cid)
-                        if new_kb:
-                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, new_text, new_kb)
+                        # برگشت به لیست به‌روز شده
+                        d2 = load_alerts()
+                        all_a2 = d2.get("alerts", [])
+                        custom_name2 = _get_user_custom_name(cbq_cid)
+                        pub2  = [a for a in all_a2 if a.get("active") and not a.get("is_private") and a.get("created_by","") == custom_name2]
+                        priv2 = [a for a in all_a2 if a.get("active") and a.get("is_private") and (
+                            str(a.get("private_cid","")) == cbq_cid or str(a.get("notify_only","")) == cbq_cid
+                        )]
+                        combined2 = pub2 + priv2
+                        if not combined2:
+                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, "✅ همه آلارم‌ها حذف شدن.", [])
+                        elif pub2 and not priv2:
+                            txt2, kb2 = _build_myalerts_section(pub2, f"🌐 <b>آلارم‌های تیمی</b>  ({len(pub2)} مورد)")
+                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, txt2, kb2)
+                        elif priv2 and not pub2:
+                            txt2, kb2 = _build_myalerts_section(priv2, f"🔒 <b>آلارم‌های شخصی</b>  ({len(priv2)} مورد)")
+                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, txt2, kb2)
                         else:
-                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, "✅ همه آلارم‌های شخصی حذف شدن.", [])
+                            txt2 = f"📋 <b>همه آلارم‌های من</b>  ({len(combined2)} مورد)"
+                            kb2 = []
+                            for a in combined2:
+                                sym2 = a.get("symbol",""); tgt2 = a.get("target_price",0)
+                                cond2 = "📈 BUY" if a.get("condition") == "below" else "📉 SELL"
+                                kb2.append([{"text":f"🗑 حذف  {sym2} {cond2} @ {fmt_price(tgt2,sym2)}","callback_data":f"del_confirm:{a['id']}"}])
+                            kb2.append([{"text":"✕ بستن","callback_data":"close_myalerts"}])
+                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, txt2, kb2)
 
                     elif cbq_data.startswith("set_reminder:"):
                         # set_reminder:cid:SYM — نشون بده ۴ گزینه بازه زمانی
@@ -1089,7 +1174,7 @@ def _do_update(upd, token):
                             if not combined_mya:
                                 edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, "📭 هیچ آلارم فعالی نداری.", [[{"text":"✕ بستن","callback_data":"close_myalerts"}]])
                             else:
-                                lines_all = [f"📋 <b>همه آلارم‌های من</b>  ({len(combined_mya)} مورد)\n━━━━━━━━━━━━━━━━━━"]
+                                lines_all = [f"📋 <b>همه آلارم‌های من</b>  ({len(combined_mya)} مورد)"]
                                 kb_all = []
                                 if pub_mya:
                                     lines_all.append("\n🌐 <b>تیمی</b>")
@@ -1097,9 +1182,16 @@ def _do_update(upd, token):
                                         sym2 = a.get("symbol",""); tgt2 = a.get("target_price",0)
                                         cond2 = "📈 BUY" if a.get("condition") == "below" else "📉 SELL"
                                         cur2 = a.get("last_price")
-                                        cur_txt = f"  ┆ <code>{fmt_price(cur2,sym2)}</code>" if cur2 else ""
-                                        lines_all.append(f"  {i}. <b>{sym2}</b>  {cond2}  🎯 <code>{fmt_price(tgt2,sym2)}</code>{cur_txt}")
-                                        kb_all.append([{"text":f"🗑 {sym2} {cond2} @ {fmt_price(tgt2,sym2)}","callback_data":f"del_alert:{a['id']}"}])
+                                        cur_txt = f"<code>{fmt_price(cur2,sym2)}</code>" if cur2 else "—"
+                                        cmt2 = f"\n│  💬 {a['comment']}" if a.get("comment") else ""
+                                        lines_all.append(
+                                            f"┌─ {i}. <b>{sym2}</b>  {cond2}\n"
+                                            f"│  🎯 هدف: <code>{fmt_price(tgt2,sym2)}</code>\n"
+                                            f"│  💹 فعلی: {cur_txt}"
+                                            f"{cmt2}\n"
+                                            f"└──────────────"
+                                        )
+                                        kb_all.append([{"text":f"🗑 حذف  {sym2} {cond2} @ {fmt_price(tgt2,sym2)}","callback_data":f"del_confirm:{a['id']}"}])
                                 if priv_mya:
                                     lines_all.append("\n🔒 <b>شخصی</b>")
                                     start2 = len(pub_mya)+1
@@ -1107,10 +1199,16 @@ def _do_update(upd, token):
                                         sym2 = a.get("symbol",""); tgt2 = a.get("target_price",0)
                                         cond2 = "📈 BUY" if a.get("condition") == "below" else "📉 SELL"
                                         cur2 = a.get("last_price")
-                                        cur_txt = f"  ┆ <code>{fmt_price(cur2,sym2)}</code>" if cur2 else ""
-                                        lines_all.append(f"  {i}. <b>{sym2}</b>  {cond2}  🎯 <code>{fmt_price(tgt2,sym2)}</code>{cur_txt}")
-                                        kb_all.append([{"text":f"🗑 {sym2} {cond2} @ {fmt_price(tgt2,sym2)}","callback_data":f"del_alert:{a['id']}"}])
-                                lines_all.append("\n━━━━━━━━━━━━━━━━━━")
+                                        cur_txt = f"<code>{fmt_price(cur2,sym2)}</code>" if cur2 else "—"
+                                        cmt2 = f"\n│  💬 {a['comment']}" if a.get("comment") else ""
+                                        lines_all.append(
+                                            f"┌─ {i}. <b>{sym2}</b>  {cond2}\n"
+                                            f"│  🎯 هدف: <code>{fmt_price(tgt2,sym2)}</code>\n"
+                                            f"│  💹 فعلی: {cur_txt}"
+                                            f"{cmt2}\n"
+                                            f"└──────────────"
+                                        )
+                                        kb_all.append([{"text":f"🗑 حذف  {sym2} {cond2} @ {fmt_price(tgt2,sym2)}","callback_data":f"del_confirm:{a['id']}"}])
                                 kb_all.append([{"text":"✕ بستن","callback_data":"close_myalerts"}])
                                 edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, "\n".join(lines_all), kb_all)
 
