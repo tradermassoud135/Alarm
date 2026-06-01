@@ -64,6 +64,7 @@ def _sb_upsert_alert(a):
     """یه آلارم رو upsert کن"""
     if not SUPABASE_KEY: return
     try:
+        # فیلدهای پایه که حتماً توی جدول هستن
         payload = {
             "id":           a["id"],
             "symbol":       a.get("symbol",""),
@@ -75,7 +76,6 @@ def _sb_upsert_alert(a):
             "created_at":   a.get("created_at", now_teh()),
             "comment":      a.get("comment",""),
             "is_private":   bool(a.get("is_private", False)),
-            "private_cid":  str(a.get("private_cid","")) if a.get("private_cid") else None,
             "notify_only":  str(a.get("notify_only","")) if a.get("notify_only") else None,
             "active":       bool(a.get("active", True)),
             "last_price":   float(a["last_price"]) if a.get("last_price") is not None else None,
@@ -83,12 +83,32 @@ def _sb_upsert_alert(a):
             "fired_at":     a.get("fired_at"),
             "fired_price":  float(a["fired_price"]) if a.get("fired_price") is not None else None,
         }
+        # فیلدهای اختیاری — فقط اگه توی جدول وجود داشت اضافه میشن
+        if a.get("private_cid") is not None:
+            payload["private_cid"] = str(a["private_cid"]) if a["private_cid"] else None
+
         r = requests.post(
             f"{SUPABASE_URL}/rest/v1/alerts",
             headers={**_sb_h(), "Prefer": "resolution=merge-duplicates,return=minimal"},
             json=payload, timeout=10)
         if r.status_code not in (200,201,204):
-            print(f"[alerts] upsert {a['id']}: {r.status_code} {r.text[:80]}")
+            err_text = r.text
+            # اگه ستون پیدا نشد، بدون اون فیلد دوباره تلاش کن
+            if r.status_code == 400 and "PGRST204" in err_text:
+                import re as _re
+                missing = _re.search(r"Could not find the '([^']+)'", err_text)
+                if missing:
+                    col = missing.group(1)
+                    print(f"[alerts] ستون '{col}' توی DB نیست — بدون اون retry میکنیم")
+                    payload.pop(col, None)
+                    r2 = requests.post(
+                        f"{SUPABASE_URL}/rest/v1/alerts",
+                        headers={**_sb_h(), "Prefer": "resolution=merge-duplicates,return=minimal"},
+                        json=payload, timeout=10)
+                    if r2.status_code not in (200,201,204):
+                        print(f"[alerts] upsert {a['id']} retry failed: {r2.status_code} {r2.text[:120]}")
+                    return
+            print(f"[alerts] upsert {a['id']}: {r.status_code} {r.text[:120]}")
     except Exception as e:
         print(f"[alerts] upsert error: {e}")
 
@@ -840,6 +860,11 @@ MAIN_MENU = [
     ["⭐ آلارم‌های من", "📊 وضعیت"],
     ["⚡ آلارم فوری",   "⏰ هشدار دوره‌ای من"],
 ]
+MAIN_MENU_PRIVATE = [
+    ["📈 آلارم جدید",  "🔒 آلارم شخصی"],
+    ["⭐ آلارم‌های من", "📊 وضعیت"],
+    ["⚡ آلارم فوری",   "⏰ هشدار دوره‌ای من"],
+]
 MAIN_MENU_ADMIN = [
     ["📈 آلارم جدید",  "🔒 آلارم شخصی"],
     ["⭐ آلارم‌های من", "📊 وضعیت"],
@@ -849,7 +874,12 @@ MAIN_MENU_ADMIN = [
 DIR_MENU = [["📈 BUY", "📉 SELL"], ["↩️ برگشت", "❌ انصراف"]]
 
 def show_main_menu(token, cid, text, is_admin=False):
-    rows = MAIN_MENU_ADMIN if is_admin else MAIN_MENU
+    if is_admin:
+        rows = MAIN_MENU_ADMIN
+    elif _has_private_access(cid):
+        rows = MAIN_MENU_PRIVATE
+    else:
+        rows = MAIN_MENU
     send_reply_keyboard(token, cid, text, rows)
 
 def _get_user_custom_name(cid):
@@ -858,6 +888,16 @@ def _get_user_custom_name(cid):
         if str(u.get("chat_id","")) == str(cid):
             return u.get("custom_name","") or u.get("username","")
     return ""
+
+def _has_private_access(cid):
+    """آیا این کاربر دسترسی آلارم شخصی داره؟ ادمین همیشه داره"""
+    if str(cid) == str(YOUR_CHAT_ID) or BROADCAST_MODE:
+        return True
+    data = load_alerts()
+    for u in data.get("users", []):
+        if str(u.get("chat_id","")) == str(cid):
+            return bool(u.get("private_access", False))
+    return False
 
 def _get_sender_name(msg):
     """اسم فرستنده — اول custom_name، بعد اسم تلگرام"""
@@ -1093,6 +1133,124 @@ def _do_update(upd, token):
                         except: pass
                         send_tg(token_cbq, cbq_cid, "✉️ متن پیام رو بنویس:")
 
+                    elif cbq_data.startswith("req_private:"):
+                        # کاربر درخواست فعال‌سازی آلارم شخصی داده
+                        req_cid = cbq_data.split(":")[1]
+                        answer_callback(token_cbq, cbq_id, "✅ درخواست ارسال شد")
+                        # پیام تایید به کاربر
+                        send_tg(token_cbq, req_cid,
+                            "📩 <b>درخواست شما ثبت شد</b>\n\n"
+                            "درخواست فعال‌سازی آلارم شخصی شما ارسال شد و در دست بررسی است.\n"
+                            "پس از تایید، یک پیام دریافت خواهید کرد. 🙏")
+                        # پیام به ادمین
+                        d_req = load_alerts()
+                        req_user = next((u for u in d_req.get("users",[]) if str(u.get("chat_id","")) == req_cid), {})
+                        req_name = req_user.get("custom_name","") or req_user.get("username","") or req_cid
+                        admin_notif = (
+                            f"📩 <b>درخواست آلارم شخصی</b>\n\n"
+                            f"👤 نام: <b>{req_name}</b>\n"
+                            f"🆔 Chat ID: <code>{req_cid}</code>\n"
+                            f"⏰ {now_pretty()} (تهران)"
+                        )
+                        approve_kb = [
+                            [{"text": "✅ تایید و فعال‌سازی", "callback_data": f"approve_private:{req_cid}"}],
+                            [{"text": "❌ رد درخواست",       "callback_data": f"reject_private:{req_cid}"}],
+                        ]
+                        send_tg_keyboard(token_cbq, YOUR_CHAT_ID, admin_notif, approve_kb)
+
+                    elif cbq_data.startswith("approve_private:"):
+                        if cbq_cid != YOUR_CHAT_ID and not BROADCAST_MODE:
+                            answer_callback(token_cbq, cbq_id, "⛔ فقط ادمین")
+                        else:
+                            target_cid = cbq_data.split(":")[1]
+                            answer_callback(token_cbq, cbq_id, "✅ فعال شد")
+                            # آپدیت private_access توی users
+                            d_apr = load_alerts()
+                            found = False
+                            for u in d_apr.get("users", []):
+                                if str(u.get("chat_id","")) == target_cid:
+                                    u["private_access"] = True
+                                    found = True
+                                    break
+                            if not found:
+                                d_apr.setdefault("users",[]).append({"chat_id": target_cid, "username": "", "joined_at": now_pretty(), "custom_name": "", "private_access": True})
+                            save_alerts(d_apr)
+                            # ویرایش پیام ادمین
+                            try:
+                                requests.post(f"https://api.telegram.org/bot{token_cbq}/editMessageReplyMarkup",
+                                    json={"chat_id": cbq_cid, "message_id": cbq_msg_id, "reply_markup": {"inline_keyboard": []}},
+                                    timeout=10, headers=H)
+                            except: pass
+                            send_tg(token_cbq, cbq_cid, f"✅ آلارم شخصی برای <code>{target_cid}</code> فعال شد.")
+                            # پیام به کاربر
+                            send_tg(token_cbq, target_cid,
+                                "🎉 <b>آلارم شخصی شما فعال شد!</b>\n\n"
+                                "یکبار /start بزنید تا منو به‌روز شود. 🔒")
+
+                    elif cbq_data.startswith("reject_private:"):
+                        if cbq_cid != YOUR_CHAT_ID and not BROADCAST_MODE:
+                            answer_callback(token_cbq, cbq_id, "⛔ فقط ادمین")
+                        else:
+                            target_cid = cbq_data.split(":")[1]
+                            answer_callback(token_cbq, cbq_id, "❌ رد شد")
+                            try:
+                                requests.post(f"https://api.telegram.org/bot{token_cbq}/editMessageReplyMarkup",
+                                    json={"chat_id": cbq_cid, "message_id": cbq_msg_id, "reply_markup": {"inline_keyboard": []}},
+                                    timeout=10, headers=H)
+                            except: pass
+                            send_tg(token_cbq, cbq_cid, f"❌ درخواست <code>{target_cid}</code> رد شد.")
+                            send_tg(token_cbq, target_cid,
+                                "❌ <b>درخواست شما رد شد.</b>\n\n"
+                                "برای اطلاعات بیشتر با ادمین تماس بگیرید.")
+
+                    elif cbq_data.startswith("admin:users"):
+                        # لیست کاربران برای ادمین
+                        if cbq_cid != YOUR_CHAT_ID and not BROADCAST_MODE:
+                            answer_callback(token_cbq, cbq_id, "⛔ فقط ادمین")
+                        else:
+                            answer_callback(token_cbq, cbq_id)
+                            d_usr = load_alerts()
+                            all_users = d_usr.get("users", [])
+                            if not all_users:
+                                edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, "📭 هیچ کاربری ثبت نشده.", [[{"text": "✕ بستن", "callback_data": "close_myalerts"}]])
+                            else:
+                                lines_u = ["👥 <b>لیست کاربران</b>\n"]
+                                kb_u = []
+                                for u in all_users:
+                                    ucid = str(u.get("chat_id",""))
+                                    uname_u = u.get("custom_name","") or u.get("username","") or ucid
+                                    priv_icon = "🔒" if u.get("private_access") else "👤"
+                                    lines_u.append(f"{priv_icon} <b>{uname_u}</b>  <code>{ucid}</code>")
+                                    kb_u.append([{"text": f"🗑 حذف {uname_u}", "callback_data": f"admin:deluser:{ucid}"}])
+                                kb_u.append([{"text": "✕ بستن", "callback_data": "close_myalerts"}])
+                                edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, "\n".join(lines_u), kb_u)
+
+                    elif cbq_data.startswith("admin:deluser:"):
+                        if cbq_cid != YOUR_CHAT_ID and not BROADCAST_MODE:
+                            answer_callback(token_cbq, cbq_id, "⛔ فقط ادمین")
+                        else:
+                            del_cid = cbq_data.split(":")[2]
+                            answer_callback(token_cbq, cbq_id, "🗑 حذف شد")
+                            d_del = load_alerts()
+                            d_del["users"] = [u for u in d_del.get("users",[]) if str(u.get("chat_id","")) != del_cid]
+                            d_del["telegram"]["chat_ids"] = [x for x in d_del["telegram"].get("chat_ids",[]) if str(x) != del_cid]
+                            save_alerts(d_del)
+                            # refresh list
+                            all_users2 = d_del.get("users", [])
+                            if not all_users2:
+                                edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, "📭 لیست کاربران خالی شد.", [[{"text": "✕ بستن", "callback_data": "close_myalerts"}]])
+                            else:
+                                lines_u2 = ["👥 <b>لیست کاربران</b>\n"]
+                                kb_u2 = []
+                                for u in all_users2:
+                                    ucid = str(u.get("chat_id",""))
+                                    uname_u2 = u.get("custom_name","") or u.get("username","") or ucid
+                                    priv_icon2 = "🔒" if u.get("private_access") else "👤"
+                                    lines_u2.append(f"{priv_icon2} <b>{uname_u2}</b>  <code>{ucid}</code>")
+                                    kb_u2.append([{"text": f"🗑 حذف {uname_u2}", "callback_data": f"admin:deluser:{ucid}"}])
+                                kb_u2.append([{"text": "✕ بستن", "callback_data": "close_myalerts"}])
+                                edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, "\n".join(lines_u2), kb_u2)
+
                     elif cbq_data == "close_myalerts":
                         answer_callback(token_cbq, cbq_id, "بسته شد")
                         try:
@@ -1119,7 +1277,7 @@ def _do_update(upd, token):
                     existing_name = existing_user.get("custom_name","").strip() if existing_user else ""
                     # ثبت کاربر اگه جدیده
                     if not existing_user:
-                        users.append({"chat_id": cid, "username": uname, "joined_at": now_teh(), "custom_name": ""})
+                        users.append({"chat_id": cid, "username": uname, "joined_at": now_teh(), "custom_name": "", "private_access": False})
                         data["users"] = users
                         ids = data.get("telegram", {}).get("chat_ids", [])
                         if cid not in [str(x) for x in ids]:
@@ -1181,25 +1339,35 @@ def _do_update(upd, token):
                     send_tg(token, cid, f"✏️ اسم جدیدت رو بنویس:{cur_info}")
 
                 # ── منو Reply Keyboard ──────────────────────────────
+                # ── منو Reply Keyboard ──────────────────────────────
                 elif txt in ("📊 وضعیت",) or (txt.startswith("/status") and txt not in ("/statuspage",)):
                     d2 = load_alerts()
                     active2 = [a for a in d2.get("alerts",[]) if a.get("active") and not a.get("is_private")]
                     my_rem = _reminders.get(cid, {})
                     is_open = is_forex_market_open()
                     is_adm = (cid == YOUR_CHAT_ID or BROADCAST_MODE)
-                    show_main_menu(token, cid,
+                    has_priv = _has_private_access(cid)
+                    status_text = (
                         f"📊 <b>وضعیت سیستم</b>\n\n"
                         f"{'🟢' if is_open else '🔴'} فارکس: {'باز' if is_open else 'بسته'}\n"
                         f"📈 آلارم فعال: <b>{len(active2)}</b>\n"
                         f"⏰ هشدار دوره‌ای من: <b>{len(my_rem)}</b>\n"
-                        f"⏱ {now_pretty()} (تهران)", is_adm)
+                        f"🔒 آلارم شخصی: {'✅ فعال' if has_priv else '❌ غیرفعال'}\n"
+                        f"⏱ {now_pretty()} (تهران)"
+                    )
+                    if not has_priv:
+                        req_kb = [[{"text": "📩 درخواست فعال‌سازی آلارم شخصی", "callback_data": f"req_private:{cid}"}]]
+                        send_tg_keyboard(token, cid, status_text, req_kb)
+                    else:
+                        show_main_menu(token, cid, status_text, is_adm)
 
                 elif txt == "⭐ آلارم‌های من":
                     is_adm = (cid == YOUR_CHAT_ID or BROADCAST_MODE)
-                    # اول دو دکمه نشون بده — تیمی / شخصی
-                    btns = [[{"text": "🌐 آلارم‌های تیمی", "callback_data": f"myalerts:pub:{cid}"}]]
-                    if is_adm:
-                        btns.append([{"text": "🔒 آلارم‌های شخصی", "callback_data": f"myalerts:priv:{cid}"}])
+                    has_priv = _has_private_access(cid)
+                    btns = [{"text": "🌐 آلارم‌های تیمی", "callback_data": f"myalerts:pub:{cid}"}]
+                    if has_priv:
+                        btns.append({"text": "🔒 آلارم‌های شخصی", "callback_data": f"myalerts:priv:{cid}"})
+                    btns = [[b] if isinstance(b, dict) else b for b in btns]
                     btns.append([{"text": "📋 همه آلارم‌های من", "callback_data": f"myalerts:all:{cid}"}])
                     btns.append([{"text": "✕ بستن", "callback_data": "close_myalerts"}])
                     send_tg_keyboard(token, cid, "⭐ <b>آلارم‌های من</b>\n\nکدوم رو می‌خوای ببینی؟", btns)
@@ -1216,6 +1384,7 @@ def _do_update(upd, token):
                     admin_kb = [
                         [{"text": "📰 اخبار فارکس",  "callback_data": "admin:news"}],
                         [{"text": "✉️ پیام به گروه", "callback_data": "admin:broadcast"}],
+                        [{"text": "👥 لیست کاربران",  "callback_data": "admin:users"}],
                         [{"text": "✕ بستن",           "callback_data": "close_myalerts"}],
                     ]
                     send_tg_keyboard(token, cid,
@@ -1237,9 +1406,9 @@ def _do_update(upd, token):
                         [["❌ انصراف"]])
 
                 elif txt == "🔒 آلارم شخصی":
-                    if cid != YOUR_CHAT_ID and not BROADCAST_MODE:
-                        is_adm = False
-                        show_main_menu(token, cid, "⚠️ این قابلیت فعلاً در دسترس نیست.", is_adm)
+                    if not _has_private_access(cid):
+                        is_adm = (cid == YOUR_CHAT_ID or BROADCAST_MODE)
+                        show_main_menu(token, cid, "⚠️ این قابلیت برای شما فعال نیست.\nاز بخش 📊 وضعیت می‌توانید درخواست دسترسی بدهید.", is_adm)
                     else:
                         _pending_alarm[cid] = {"step": "alarm_symbol", "data": {"ptype": "private"}}
                         send_reply_keyboard(token, cid,
@@ -1248,6 +1417,7 @@ def _do_update(upd, token):
                             "<code>EURUSD</code>  <code>XAUUSD</code>  <code>BTC</code>\n\n"
                             "<i>مثال: XAUUSD یا BTC</i>",
                             [["❌ انصراف"]])
+
 
                 elif txt == "⚡ آلارم فوری" and (cid == YOUR_CHAT_ID or BROADCAST_MODE):
                     _pending_alarm[cid] = {"step": "sos_symbol", "data": {}}
