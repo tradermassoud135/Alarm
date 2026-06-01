@@ -519,9 +519,42 @@ def get_price(symbol, asset_type):
         return get_crypto_price(symbol)
     return get_forex_price(symbol)
 
+# ── ردیابی پیام‌های ربات برای پاک‌سازی چت ────────────────────
+# { chat_id: [msg_id, msg_id, ...] }  — فقط پیام‌های غیر-fire
+_bot_msg_ids: dict = {}
+_BOT_MSG_MAX = 200  # حداکثر تعداد id هر چت
+
+def _track_msg(chat_id: str, msg_id: int):
+    """id پیام ربات رو ذخیره کن (غیر از fired alerts)"""
+    cid = str(chat_id)
+    if cid not in _bot_msg_ids:
+        _bot_msg_ids[cid] = []
+    _bot_msg_ids[cid].append(msg_id)
+    # سقف حافظه
+    if len(_bot_msg_ids[cid]) > _BOT_MSG_MAX:
+        _bot_msg_ids[cid] = _bot_msg_ids[cid][-_BOT_MSG_MAX:]
+
+def delete_chat_history(token: str, chat_id: str):
+    """همه پیام‌های track‌شده رو پاک کن — آلارم‌های fire دست‌نخورده می‌مونن"""
+    cid = str(chat_id)
+    ids = _bot_msg_ids.pop(cid, [])
+    deleted = 0
+    for mid in ids:
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{token}/deleteMessage",
+                json={"chat_id": cid, "message_id": mid},
+                timeout=5, headers=H)
+            deleted += 1
+        except: pass
+    return deleted
+
 def send_tg(token, chat_id, text):
     try:
         r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": str(chat_id), "text": text, "parse_mode": "HTML"}, timeout=10, headers=H)
+        mid = r.json().get("result", {}).get("message_id")
+        if mid:
+            _track_msg(str(chat_id), mid)
         return r.status_code == 200
     except: return False
 
@@ -542,7 +575,10 @@ def send_reply_keyboard(token, chat_id, text, rows):
             json={"chat_id": str(chat_id), "text": text,
                   "parse_mode": "HTML", "reply_markup": markup},
             timeout=10, headers=H)
-        return r.json().get("result", {}).get("message_id")
+        mid = r.json().get("result", {}).get("message_id")
+        if mid:
+            _track_msg(str(chat_id), mid)
+        return mid
     except: return None
 
 def remove_reply_keyboard(token, chat_id, text):
@@ -554,10 +590,13 @@ def remove_reply_keyboard(token, chat_id, text):
                   "parse_mode": "HTML",
                   "reply_markup": {"remove_keyboard": True}},
             timeout=10, headers=H)
-        return r.json().get("result", {}).get("message_id")
+        mid = r.json().get("result", {}).get("message_id")
+        if mid:
+            _track_msg(str(chat_id), mid)
+        return mid
     except: return None
 
-def send_tg_keyboard(token, chat_id, text, keyboard):
+def send_tg_keyboard(token, chat_id, text, keyboard, track=True):
     """ارسال پیام با inline keyboard"""
     try:
         r = requests.post(
@@ -565,7 +604,10 @@ def send_tg_keyboard(token, chat_id, text, keyboard):
             json={"chat_id": str(chat_id), "text": text,
                   "parse_mode": "HTML", "reply_markup": {"inline_keyboard": keyboard}},
             timeout=10, headers=H)
-        return r.json().get("result", {}).get("message_id")
+        mid = r.json().get("result", {}).get("message_id")
+        if mid and track:
+            _track_msg(str(chat_id), mid)
+        return mid
     except: return None
 
 def edit_tg_keyboard(token, chat_id, message_id, text, keyboard):
@@ -1392,6 +1434,21 @@ def _do_update(upd, token):
                                 kb_back.append([{"text": "✕ بستن", "callback_data": "close_myalerts"}])
                                 edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, "\n".join(lines_back), kb_back)
 
+                    elif cbq_data.startswith("clean_chat:"):
+                        answer_callback(token_cbq, cbq_id, "🧹 در حال پاک‌سازی...")
+                        target_cid = cbq_data.split(":", 1)[1]
+                        # پیام خود status رو هم به لیست اضافه کن
+                        if cbq_msg_id:
+                            _track_msg(cbq_cid, cbq_msg_id)
+                        def _do_clean(tok=token_cbq, c=cbq_cid, tc=target_cid):
+                            cnt = delete_chat_history(tok, tc)
+                            send_tg_keyboard(tok, c,
+                                f"✅ <b>{cnt} پیام پاک شد.</b>\n"
+                                f"آلارم‌های ارسال‌شده دست‌نخورده موندن. 🚨",
+                                [[{"text": "🧹 پاک‌سازی مجدد", "callback_data": f"clean_chat:{tc}"},
+                                  {"text": "✕ بستن", "callback_data": "close_myalerts"}]])
+                        threading.Thread(target=_do_clean, daemon=True).start()
+
                     elif cbq_data == "close_myalerts":
                         answer_callback(token_cbq, cbq_id, "بسته شد")
                         try:
@@ -1409,6 +1466,11 @@ def _do_update(upd, token):
                 ch = msg.get("chat", {})
                 cid = str(ch.get("id", ""))
                 uname = ch.get("username", "") or ch.get("first_name", "")
+
+                # track پیام کاربر برای پاک‌سازی
+                user_msg_id = msg.get("message_id")
+                if cid and user_msg_id:
+                    _track_msg(cid, user_msg_id)
 
                 # ── /start ──────────────────────────────────────────
                 if txt.startswith("/start") and cid:
@@ -1497,10 +1559,14 @@ def _do_update(upd, token):
                         f"⏱ {now_pretty()} (تهران)"
                     )
                     if not has_priv:
-                        req_kb = [[{"text": "📩 درخواست فعال‌سازی آلارم شخصی", "callback_data": f"req_private:{cid}"}]]
+                        req_kb = [
+                            [{"text": "📩 درخواست فعال‌سازی آلارم شخصی", "callback_data": f"req_private:{cid}"}],
+                            [{"text": "🧹 پاک کردن چت (غیر از آلارم‌ها)", "callback_data": f"clean_chat:{cid}"}],
+                        ]
                         send_tg_keyboard(token, cid, status_text, req_kb)
                     else:
-                        show_main_menu(token, cid, status_text, is_adm)
+                        clean_kb = [[{"text": "🧹 پاک کردن چت (غیر از آلارم‌ها)", "callback_data": f"clean_chat:{cid}"}]]
+                        send_tg_keyboard(token, cid, status_text, clean_kb)
 
                 elif txt == "⭐ آلارم‌های من":
                     is_adm = (cid == YOUR_CHAT_ID)
@@ -1535,7 +1601,8 @@ def _do_update(upd, token):
                 elif txt == "❌ انصراف":
                     _pending_alarm.pop(cid, None)
                     is_adm = (cid == YOUR_CHAT_ID)
-                    show_main_menu(token, cid, "↩️ به منو برگشتی.", is_adm)
+                    # فقط منو رو نشون بده، بدون پیام اضافه
+                    show_main_menu(token, cid, "👇", is_adm)
 
                 elif txt == "📈 آلارم جدید" and (cid == YOUR_CHAT_ID or BROADCAST_MODE):
                     _pending_alarm[cid] = {"step": "alarm_symbol", "data": {"ptype": "public"}}
@@ -1575,7 +1642,7 @@ def _do_update(upd, token):
                     # ── برگشت جهانی در هر مرحله ─────────────────────────
                     if txt in ("↩️ برگشت", "❌ انصراف"):
                         del _pending_alarm[cid]
-                        show_main_menu(token, cid, "↩️ به منوی اصلی برگشتی.", is_adm)
+                        show_main_menu(token, cid, "👇", is_adm)
 
                     elif step == "alarm_symbol":
                         sym_w = txt.upper().replace("/","")
@@ -1650,18 +1717,8 @@ def _do_update(upd, token):
                         _sb_upsert_alert(new_alert_w)
                         _cache_alerts = d2
                         del _pending_alarm[cid]
-                        arrow_w = "📈 BUY" if dw["condition"] == "below" else "📉 SELL"
-                        priv_tag = "🔒 شخصی" if is_private_w else "🌐 عمومی"
-                        show_main_menu(token, cid,
-                            f"✅ <b>آلارم با موفقیت ثبت شد!</b>\n"
-                            f"━━━━━━━━━━━━━━━━━━\n"
-                            f"💰 نماد:   <b>{dw['symbol']}</b>\n"
-                            f"📊 جهت:    {arrow_w}\n"
-                            f"🎯 قیمت:   <code>{fmt_price(dw['target_price'], dw['symbol'])}</code>\n"
-                            f"🏷 نوع:    {priv_tag}\n"
-                            + (f"💬 یادداشت: {comment_w}\n" if comment_w else "")
-                            + f"━━━━━━━━━━━━━━━━━━\n"
-                            f"⏰ {now_pretty()} (تهران)", is_adm)
+                        # چت رو پاک کن — آلارم‌های fired دست‌نخورده می‌مونن
+                        threading.Thread(target=delete_chat_history, args=(token, cid), daemon=True).start()
                         def _bgw(alert=new_alert_w, s=dw["symbol"], t=dw["atype"]):
                             try:
                                 cur = get_price(s, t)
@@ -1733,8 +1790,9 @@ def _do_update(upd, token):
                         del _pending_alarm[cid]
                         for tc2 in targets2:
                             kb2 = [[{"text": "⏰ هشدار دوره‌ای", "callback_data": f"set_reminder:{tc2}:{sym_s}"}]]
-                            send_tg_keyboard(token, str(tc2), out_s, kb2)
-                        show_main_menu(token, cid, f"✅ آلارم فوری به {len(targets2)} نفر ارسال شد.", is_adm)
+                            send_tg_keyboard(token, str(tc2), out_s, kb2, track=False)
+                        # چت رو پاک کن
+                        threading.Thread(target=delete_chat_history, args=(token, cid), daemon=True).start()
 
                     elif step == "broadcast_text":
                         _, all_cids3, _ = _get_token_and_cids()
@@ -1773,7 +1831,9 @@ def _do_update(upd, token):
                         _, all_cids, _ = _get_token_and_cids()
                         targets = all_cids if BROADCAST_MODE else [YOUR_CHAT_ID]
                         for tc in targets:
-                            send_tg(token, tc, out_msg)
+                            send_tg_keyboard(token, tc, out_msg,
+                                [[{"text": "⏰ هشدار دوره‌ای", "callback_data": f"set_reminder:{tc}:{sym}"}]],
+                                track=False)
                         d = load_alerts()
                         arch = d.get("archive", [])
                         arch.append({"id": str(int(time.time()*1000)), "symbol": sym, "type": atype,
@@ -1782,8 +1842,8 @@ def _do_update(upd, token):
                             "instant": True, "created_at": now_teh()})
                         d["archive"] = arch
                         save_alerts(d)
-                        mode_txt = f"به {len(targets)} نفر" if BROADCAST_MODE else "فقط برای شما"
-                        send_tg(token, cid, f"✅ آلارم فوری {sym} ارسال شد ({mode_txt})")
+                        # چت پاک بشه
+                        threading.Thread(target=delete_chat_history, args=(token, cid), daemon=True).start()
 
                 # ── /alarm ───────────────────────────────────────────
                 elif txt.startswith("/alarm") and (cid == YOUR_CHAT_ID or BROADCAST_MODE):
@@ -1821,17 +1881,10 @@ def _do_update(upd, token):
                             }
                             d = load_alerts()
                             d["alerts"].append(new_alert)
-                            # اول save کن — سریع
                             _sb_upsert_alert(new_alert)
                             _cache_alerts = d
-                            # فوری پیام تأیید بده
-                            send_tg(token, cid,
-                                f"✅ <b>آلارم ثبت شد</b>\n\n"
-                                f"💰 <b>{sym}</b> — {arrow}\n"
-                                f"🎯 هدف: <code>{fmt_price(tgt_f, sym)}</code>"
-                                + (f"\n💬 <i>{comment}</i>" if comment else "") +
-                                f"\n\n⏰ {now_pretty()} (تهران)")
-                            # در background قیمت فعلی رو بگیر و آپدیت کن
+                            # چت پاک بشه
+                            threading.Thread(target=delete_chat_history, args=(token, cid), daemon=True).start()
                             def _bg_price(alert=new_alert, s=sym, t=atype, tok=token, c=cid):
                                 try:
                                     cur = get_price(s, t)
@@ -2068,10 +2121,10 @@ def check_alerts():
                         reminder_kb = lambda cid: [[{"text": "⏰ هشدار دوره‌ای", "callback_data": f"set_reminder:{cid}:{sym}"}]]
                         if a.get("is_private") and a.get("notify_only"):
                             priv_cid = str(a["notify_only"])
-                            send_tg_keyboard(token, priv_cid, fired_msg, reminder_kb(priv_cid))
+                            send_tg_keyboard(token, priv_cid, fired_msg, reminder_kb(priv_cid), track=False)
                         else:
                             for cid in notify_cids:
-                                send_tg_keyboard(token, str(cid), fired_msg, reminder_kb(str(cid)))
+                                send_tg_keyboard(token, str(cid), fired_msg, reminder_kb(str(cid)), track=False)
                         # فوری توی Supabase آپدیت کن
                         save_alert_fired(a)
             if fired:
