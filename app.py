@@ -1457,7 +1457,24 @@ def _do_update(upd, token):
                                 json={"chat_id": cbq_cid, "message_id": cbq_msg_id},
                                 timeout=10, headers=H)
                         except: pass
-                    return
+                        return
+
+                    elif cbq_data.startswith("edit_name:"):
+                        answer_callback(token_cbq, cbq_id)
+                        en_cid = cbq_data.split(":", 1)[1] if ":" in cbq_data else cbq_cid
+                        _pending_name[en_cid] = True
+                        d_en = load_alerts()
+                        users_en = d_en.get("users", [])
+                        cur_en = next((u.get("custom_name","") for u in users_en if str(u.get("chat_id","")) == en_cid), "")
+                        cur_info_en = f"\nاسم فعلی: <b>{cur_en}</b>" if cur_en else ""
+                        try:
+                            requests.post(
+                                f"https://api.telegram.org/bot{token_cbq}/deleteMessage",
+                                json={"chat_id": cbq_cid, "message_id": cbq_msg_id},
+                                timeout=10, headers=H)
+                        except: pass
+                        send_tg(token_cbq, en_cid, f"✏️ اسم جدیدت رو بنویس:{cur_info_en}")
+                        return
 
                 msg = upd.get("message", {})
                 raw_txt = msg.get("text", "") or ""
@@ -1550,10 +1567,16 @@ def _do_update(upd, token):
                     is_open = is_forex_market_open()
                     is_adm = (cid == YOUR_CHAT_ID)
                     has_priv = _has_private_access(cid)
+                    # آلارم‌های خود کاربر
+                    custom_name_status = _get_user_custom_name(cid)
+                    my_pub_alerts = [a for a in d2.get("alerts",[]) if a.get("active") and not a.get("is_private") and a.get("created_by","") == custom_name_status]
+                    my_priv_alerts = [a for a in d2.get("alerts",[]) if a.get("active") and a.get("is_private") and (str(a.get("private_cid","")) == cid or str(a.get("notify_only","")) == cid)]
+                    my_total = len(my_pub_alerts) + len(my_priv_alerts)
                     status_text = (
                         f"📊 <b>وضعیت سیستم</b>\n\n"
                         f"{'🟢' if is_open else '🔴'} فارکس: {'باز' if is_open else 'بسته'}\n"
-                        f"📈 آلارم فعال: <b>{len(active2)}</b>\n"
+                        f"📈 آلارم فعال سایت: <b>{len(active2)}</b>\n"
+                        f"🔔 آلارم‌های من: <b>{my_total}</b>\n"
                         f"⏰ هشدار دوره‌ای من: <b>{len(my_rem)}</b>\n"
                         f"🔒 آلارم شخصی: {'✅ فعال' if has_priv else '❌ غیرفعال'}\n"
                         f"⏱ {now_pretty()} (تهران)"
@@ -1561,12 +1584,12 @@ def _do_update(upd, token):
                     if not has_priv:
                         req_kb = [
                             [{"text": "📩 درخواست فعال‌سازی آلارم شخصی", "callback_data": f"req_private:{cid}"}],
-                            [{"text": "🧹 پاک کردن چت (غیر از آلارم‌ها)", "callback_data": f"clean_chat:{cid}"}],
+                            [{"text": "✏️ ویرایش نام", "callback_data": f"edit_name:{cid}"}],
                         ]
                         send_tg_keyboard(token, cid, status_text, req_kb)
                     else:
-                        clean_kb = [[{"text": "🧹 پاک کردن چت (غیر از آلارم‌ها)", "callback_data": f"clean_chat:{cid}"}]]
-                        send_tg_keyboard(token, cid, status_text, clean_kb)
+                        edit_name_kb = [[{"text": "✏️ ویرایش نام", "callback_data": f"edit_name:{cid}"}]]
+                        send_tg_keyboard(token, cid, status_text, edit_name_kb)
 
                 elif txt == "⭐ آلارم‌های من":
                     is_adm = (cid == YOUR_CHAT_ID)
@@ -1601,8 +1624,8 @@ def _do_update(upd, token):
                 elif txt == "❌ انصراف":
                     _pending_alarm.pop(cid, None)
                     is_adm = (cid == YOUR_CHAT_ID)
-                    # فقط منو رو نشون بده، بدون پیام اضافه
-                    show_main_menu(token, cid, "👇", is_adm)
+                    show_main_menu(token, cid, "از منوی زیر انتخاب کن 👇", is_adm)
+                    return
 
                 elif txt == "📈 آلارم جدید" and (cid == YOUR_CHAT_ID or BROADCAST_MODE):
                     _pending_alarm[cid] = {"step": "alarm_symbol", "data": {"ptype": "public"}}
@@ -1646,8 +1669,6 @@ def _do_update(upd, token):
                             dw["atype"]  = "forex" if any(x in sym_w for x in ["EUR","GBP","JPY","XAU","XAG","CHF","CAD","AUD","NZD"]) else "crypto"
                             _pending_alarm[cid]["step"] = "alarm_dir"
                             ptype_lbl = "🔒 شخصی" if dw.get("ptype") == "private" else "📈 عمومی"
-                            # چت رو پاک کن، یه پیام تمیز بده
-                            threading.Thread(target=delete_chat_history, args=(token, cid), daemon=True).start()
                             send_reply_keyboard(token, cid,
                                 f"<b>{sym_w}</b>  {ptype_lbl}\n\n"
                                 f"جهت رو انتخاب کن:", DIR_MENU)
@@ -1663,7 +1684,6 @@ def _do_update(upd, token):
                             send_reply_keyboard(token, cid, "⚠️ لطفاً یکی از دکمه‌ها رو بزن:", DIR_MENU)
                             return
                         _pending_alarm[cid]["step"] = "alarm_price"
-                        threading.Thread(target=delete_chat_history, args=(token, cid), daemon=True).start()
                         send_reply_keyboard(token, cid,
                             f"<b>{dw['symbol']}</b>  {dir_lbl}\n\n"
                             f"قیمت هدف رو بنویس:",
@@ -1674,7 +1694,6 @@ def _do_update(upd, token):
                             dw["target_price"] = float(txt.replace(",",""))
                             _pending_alarm[cid]["step"] = "alarm_comment"
                             dir_lbl2 = "📈 BUY" if dw["condition"] == "below" else "📉 SELL"
-                            threading.Thread(target=delete_chat_history, args=(token, cid), daemon=True).start()
                             send_reply_keyboard(token, cid,
                                 f"<b>{dw['symbol']}</b>  {dir_lbl2}  @  <code>{fmt_price(dw['target_price'], dw['symbol'])}</code>\n\n"
                                 f"یادداشت بنویس یا بدون یادداشت ثبت کن:",
@@ -1702,17 +1721,25 @@ def _do_update(upd, token):
                         _sb_upsert_alert(new_alert_w)
                         _cache_alerts = d2
                         del _pending_alarm[cid]
-                        # چت رو پاک کن و پیام تأیید بده
-                        threading.Thread(target=delete_chat_history, args=(token, cid), daemon=True).start()
                         dir_lbl_f = "📈 BUY" if new_alert_w["condition"] == "below" else "📉 SELL"
                         priv_lbl_f = "  🔒 شخصی" if is_private_w else ""
+                        # فقط پیام آخری رو ادیت کن — چت پاک نمیشه
                         confirm_txt = (
-                            f"✅ آلارم ثبت شد{priv_lbl_f}\n\n"
-                            f"<b>{new_alert_w['symbol']}</b>  {dir_lbl_f}  @  <code>{fmt_price(new_alert_w['target_price'], new_alert_w['symbol'])}</code>"
-                            + (f"\n💬 {comment_w}" if comment_w else "")
+                            f"✅ <b>{new_alert_w['symbol']}</b>  {dir_lbl_f}  @  <code>{fmt_price(new_alert_w['target_price'], new_alert_w['symbol'])}</code>{priv_lbl_f}\n"
+                            + (f"💬 {comment_w}\n" if comment_w else "")
+                            + f"آلارم ثبت شد ✅"
                         )
                         is_adm_f = (cid == YOUR_CHAT_ID)
-                        show_main_menu(token, cid, confirm_txt, is_adm_f)
+                        # ادیت پیام فعلی به جای حذف
+                        if user_msg_id:
+                            try:
+                                requests.post(
+                                    f"https://api.telegram.org/bot{token}/editMessageText",
+                                    json={"chat_id": cid, "message_id": user_msg_id,
+                                          "text": confirm_txt, "parse_mode": "HTML"},
+                                    timeout=10, headers=H)
+                            except: pass
+                        show_main_menu(token, cid, "از منوی زیر انتخاب کن 👇", is_adm_f)
                         def _bgw(alert=new_alert_w, s=dw["symbol"], t=dw["atype"]):
                             try:
                                 cur = get_price(s, t)
