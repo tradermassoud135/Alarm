@@ -1493,6 +1493,153 @@ def _do_update(upd, token):
                                 json={"chat_id": cbq_cid, "message_id": cbq_msg_id},
                                 timeout=10, headers=H)
                         except: pass
+
+                    elif cbq_data.startswith("flow_cancel:"):
+                        # لغو هر flow در حال اجرا (آلارم عادی یا SOS)
+                        f_cid = cbq_data.split(":", 1)[1]
+                        _pending_alarm.pop(f_cid, None)
+                        answer_callback(token_cbq, cbq_id, "لغو شد")
+                        edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                            "❌ <b>عملیات لغو شد.</b>", [])
+
+                    elif cbq_data.startswith("alarm_dir:"):
+                        # alarm_dir:cid:buy|sell
+                        parts_ad = cbq_data.split(":", 2)
+                        ad_cid = parts_ad[1] if len(parts_ad) > 1 else cbq_cid
+                        ad_raw = parts_ad[2] if len(parts_ad) > 2 else "sell"
+                        pend_ad = _pending_alarm.get(ad_cid)
+                        if not pend_ad or pend_ad.get("step") != "alarm_dir":
+                            answer_callback(token_cbq, cbq_id, "⚠️ جلسه منقضی شد — دوباره شروع کن")
+                            return
+                        answer_callback(token_cbq, cbq_id)
+                        dw_ad = pend_ad["data"]
+                        if ad_raw == "buy":
+                            dw_ad["condition"] = "below"
+                            dir_lbl_ad = "📈 BUY"
+                        else:
+                            dw_ad["condition"] = "above"
+                            dir_lbl_ad = "📉 SELL"
+                        pend_ad["step"] = "alarm_price"
+                        ptype_lbl_ad = "🔒 شخصی" if dw_ad.get("ptype") == "private" else "🌐 تیمی"
+                        edit_tg_keyboard(token_cbq, ad_cid, cbq_msg_id,
+                            f"🔔 <b>{dw_ad['symbol']}</b>  {dir_lbl_ad}  ({ptype_lbl_ad})\n\nقیمت هدف رو بنویس:\nمثال: <code>1.08500</code>  یا  <code>2350</code>",
+                            [[{"text": "❌ انصراف", "callback_data": f"flow_cancel:{ad_cid}"}]])
+
+                    elif cbq_data.startswith("alarm_submit:"):
+                        # ثبت آلارم بدون یادداشت از طریق دکمه inline
+                        as_cid = cbq_data.split(":", 1)[1]
+                        pend_as = _pending_alarm.get(as_cid)
+                        if not pend_as or pend_as.get("step") != "alarm_comment":
+                            answer_callback(token_cbq, cbq_id, "⚠️ جلسه منقضی شد — دوباره شروع کن")
+                            return
+                        answer_callback(token_cbq, cbq_id, "⏳ در حال ثبت...")
+                        dw_as = pend_as["data"]
+                        as_uname = cbq.get("from",{}).get("username","") or cbq.get("from",{}).get("first_name","")
+                        is_private_as = dw_as.get("ptype","public") == "private"
+                        sender_as = _get_user_custom_name(as_cid) or as_uname
+                        sym_as = dw_as["symbol"]
+                        atype_as = dw_as["atype"]
+                        new_alert_as = {
+                            "id": str(int(time.time()*1000)),
+                            "symbol": sym_as, "type": atype_as,
+                            "target_price": dw_as["target_price"], "condition": dw_as["condition"],
+                            "comment": "", "created_by": sender_as,
+                            "active": True, "last_price": None, "last_checked": None,
+                            "created_at": now_teh(),
+                            "is_private": is_private_as,
+                            "private_cid": as_cid if is_private_as else None,
+                            "notify_only": as_cid if is_private_as else (YOUR_CHAT_ID if not BROADCAST_MODE else None)
+                        }
+                        d_as = load_alerts()
+                        d_as["alerts"].append(new_alert_as)
+                        _sb_upsert_alert(new_alert_as)
+                        _cache_alerts = d_as
+                        del _pending_alarm[as_cid]
+                        dir_lbl_as = "📈 BUY" if new_alert_as["condition"] == "below" else "📉 SELL"
+                        priv_lbl_as = "  🔒 شخصی" if is_private_as else "  🌐 تیمی"
+                        confirm_as = (
+                            f"✅ <b>آلارم ثبت شد!</b>\n\n"
+                            f"💰 <b>{sym_as}</b>  {dir_lbl_as}{priv_lbl_as}\n"
+                            f"🎯 هدف: <code>{fmt_price(new_alert_as['target_price'], sym_as)}</code>\n"
+                            f"\n⏰ {now_teh()} (تهران)"
+                        )
+                        edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, confirm_as, [])
+                        def _bg_as(alert=new_alert_as, s=sym_as, t=atype_as):
+                            try:
+                                cur = get_price(s, t)
+                                if cur:
+                                    alert["last_price"] = cur
+                                    alert["last_checked"] = now_teh()
+                                    _sb_upsert_alert(alert)
+                            except: pass
+                        threading.Thread(target=_bg_as, daemon=True).start()
+
+                    elif cbq_data.startswith("sos_dir:"):
+                        # sos_dir:cid:buy|sell
+                        parts_sd = cbq_data.split(":", 2)
+                        sd_cid = parts_sd[1] if len(parts_sd) > 1 else cbq_cid
+                        sd_raw = parts_sd[2] if len(parts_sd) > 2 else "sell"
+                        pend = _pending_alarm.get(sd_cid)
+                        if not pend or pend.get("step") != "sos_dir":
+                            answer_callback(token_cbq, cbq_id, "⚠️ جلسه منقضی شد — دوباره شروع کن")
+                            return
+                        answer_callback(token_cbq, cbq_id)
+                        dw_sd = pend["data"]
+                        if sd_raw == "buy":
+                            dw_sd["condition"] = "below"
+                            dw_sd["dir_lbl"] = "📈 BUY"
+                        else:
+                            dw_sd["condition"] = "above"
+                            dw_sd["dir_lbl"] = "📉 SELL"
+                        pend["step"] = "sos_comment"
+                        sym_sd = dw_sd.get("symbol", "")
+                        dir_lbl_sd = dw_sd["dir_lbl"]
+                        edit_tg_keyboard(token_cbq, sd_cid, cbq_msg_id,
+                            f"⚡ <b>{sym_sd}</b>  {dir_lbl_sd}\n\nیادداشت اختیاری بنویس\nیا دکمه «بدون یادداشت» رو بزن:",
+                            [
+                                [{"text": "✅ ارسال بدون یادداشت", "callback_data": f"sos_nocomment:{sd_cid}"}],
+                                [{"text": "❌ انصراف", "callback_data": f"flow_cancel:{sd_cid}"}]
+                            ])
+
+                    elif cbq_data.startswith("sos_nocomment:"):
+                        # کاربر بدون یادداشت ارسال کرد
+                        sc_cid = cbq_data.split(":", 1)[1]
+                        pend_sc = _pending_alarm.get(sc_cid)
+                        if not pend_sc or pend_sc.get("step") != "sos_comment":
+                            answer_callback(token_cbq, cbq_id, "⚠️ جلسه منقضی شد — دوباره شروع کن")
+                            return
+                        answer_callback(token_cbq, cbq_id, "⏳ در حال ارسال...")
+                        dw_sc = pend_sc["data"]
+                        sym_sc = dw_sc["symbol"]
+                        condition_sc = dw_sc["condition"]
+                        dir_lbl_sc = dw_sc.get("dir_lbl", "📈 BUY" if condition_sc == "below" else "📉 SELL")
+                        atype_sc = "forex" if any(x in sym_sc for x in ["EUR","GBP","JPY","XAU","XAG","CHF","CAD","AUD","NZD"]) else "crypto"
+                        sender_sc = _get_user_custom_name(sc_cid) or cbq_cid
+                        hashtag_sc = "#" + re.sub(r"[^\w]","_", sender_sc).strip("_")
+                        arrow_sc = "📈 ناحیه سل" if condition_sc == "above" else "📉 ناحیه بای"
+                        try: cur_sc = get_price(sym_sc, atype_sc)
+                        except: cur_sc = None
+                        out_sc = (
+                            f"🚨 <b>آلارم فوری!</b>\n"
+                            f"━━━━━━━━━━━━━━━━━━\n"
+                            f"💰 <b>{sym_sc}</b>  {arrow_sc}\n"
+                            f"👤 {hashtag_sc}\n"
+                            f"📊 قیمت: <b>{fmt_price(cur_sc, sym_sc) if cur_sc else '—'}</b>\n"
+                            f"━━━━━━━━━━━━━━━━━━\n"
+                            f"⏰ {now_pretty()} (تهران)"
+                        )
+                        _, all_cids_sc, _ = _get_token_and_cids()
+                        targets_sc = all_cids_sc if BROADCAST_MODE else [YOUR_CHAT_ID]
+                        del _pending_alarm[sc_cid]
+                        edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                            f"✅ <b>آلارم فوری ارسال شد!</b>\n\n"
+                            f"💰 <b>{sym_sc}</b>  {dir_lbl_sc}\n"
+                            f"⏰ {now_pretty()} (تهران)", [])
+                        def _bg_sos(tok=token_cbq, tgts=targets_sc, msg=out_sc, s=sym_sc):
+                            for tc_sc in tgts:
+                                kb_sc = [[{"text": "⏰ هشدار دوره‌ای", "callback_data": f"set_reminder:{tc_sc}:{s}"}]]
+                                send_tg_keyboard(tok, str(tc_sc), msg, kb_sc, track=False)
+                        threading.Thread(target=_bg_sos, daemon=True).start()
                     return
 
                 msg = upd.get("message", {})
@@ -1635,15 +1782,16 @@ def _do_update(upd, token):
 
 
                 elif txt == "❌ انصراف":
-                    _pending_alarm.pop(cid, None)
-                    is_adm = (cid == YOUR_CHAT_ID)
-                    # فقط منو رو نشون بده، بدون پیام اضافه
-                    show_main_menu(token, cid, "👇", is_adm)
+                    pend_cancel = _pending_alarm.pop(cid, None)
+                    if pend_cancel and pend_cancel.get("bot_msg_id"):
+                        edit_tg_keyboard(token, cid, pend_cancel["bot_msg_id"],
+                            "❌ <b>عملیات لغو شد.</b>", [])
 
                 elif txt == "📈 آلارم جدید" and (cid == YOUR_CHAT_ID or BROADCAST_MODE):
-                    mid_new = send_reply_keyboard(token, cid,
+                    kb_new = [[{"text": "❌ انصراف", "callback_data": f"flow_cancel:{cid}"}]]
+                    mid_new = send_tg_keyboard(token, cid,
                         "🔔 <b>آلارم جدید</b>\n\nاسم نماد رو بنویس:\n<code>EURUSD</code>  <code>XAUUSD</code>  <code>BTC</code>",
-                        [["❌ انصراف"]])
+                        kb_new)
                     _pending_alarm[cid] = {"step": "alarm_symbol", "data": {"ptype": "public"}, "bot_msg_id": mid_new}
 
                 elif txt == "🔒 آلارم شخصی":
@@ -1651,17 +1799,19 @@ def _do_update(upd, token):
                         is_adm = (cid == YOUR_CHAT_ID)
                         show_main_menu(token, cid, "⚠️ این قابلیت برای شما فعال نیست.\nاز بخش 📊 وضعیت می‌توانید درخواست دسترسی بدهید.", is_adm)
                     else:
-                        mid_priv = send_reply_keyboard(token, cid,
+                        kb_priv = [[{"text": "❌ انصراف", "callback_data": f"flow_cancel:{cid}"}]]
+                        mid_priv = send_tg_keyboard(token, cid,
                             "🔒 <b>آلارم شخصی</b>\n\nاسم نماد رو بنویس:\n<code>EURUSD</code>  <code>XAUUSD</code>  <code>BTC</code>",
-                            [["❌ انصراف"]])
+                            kb_priv)
                         _pending_alarm[cid] = {"step": "alarm_symbol", "data": {"ptype": "private"}, "bot_msg_id": mid_priv}
 
 
                 elif txt == "⚡ آلارم فوری" and (cid == YOUR_CHAT_ID or BROADCAST_MODE):
-                    _pending_alarm[cid] = {"step": "sos_symbol", "data": {}}
-                    send_reply_keyboard(token, cid,
+                    kb_sos = [[{"text": "❌ انصراف", "callback_data": f"flow_cancel:{cid}"}]]
+                    mid_sos = send_tg_keyboard(token, cid,
                         "⚡ <b>آلارم فوری</b>\n\nاسم نماد رو بنویس:\n<code>EURUSD</code>  <code>XAUUSD</code>  <code>BTC</code>",
-                        [["❌ انصراف"]])
+                        kb_sos)
+                    _pending_alarm[cid] = {"step": "sos_symbol", "data": {}, "bot_msg_id": mid_sos}
 
                 elif cid in _pending_alarm and not txt.startswith("/"):
                     step = _pending_alarm[cid]["step"]
@@ -1673,40 +1823,41 @@ def _do_update(upd, token):
                     if txt in ("↩️ برگشت", "❌ انصراف"):
                         del _pending_alarm[cid]
                         if bot_msg_id:
-                            _alarm_edit(token, cid, bot_msg_id, "❌ آلارم لغو شد.")
-                        show_main_menu(token, cid, "از منوی زیر انتخاب کن 👇", is_adm)
+                            edit_tg_keyboard(token, cid, bot_msg_id, "❌ <b>عملیات لغو شد.</b>", [])
+                        # پیام کاربر رو ادیت نکن، فقط state رو پاک کردیم
 
                     elif step == "alarm_symbol":
                         sym_w = txt.upper().replace("/","")
                         if len(sym_w) < 2:
                             if bot_msg_id:
-                                _alarm_edit(token, cid, bot_msg_id,
-                                    "❌ نماد نامعتبر.\n\nاسم نماد رو بنویس:\n<code>EURUSD</code>  <code>XAUUSD</code>  <code>BTC</code>")
+                                edit_tg_keyboard(token, cid, bot_msg_id,
+                                    "🔔 <b>آلارم جدید</b>\n\n❌ نماد نامعتبر.\nاسم نماد رو بنویس:\n<code>EURUSD</code>  <code>XAUUSD</code>  <code>BTC</code>",
+                                    [[{"text": "❌ انصراف", "callback_data": f"flow_cancel:{cid}"}]])
                         else:
                             dw["symbol"] = sym_w
                             dw["atype"]  = "forex" if any(x in sym_w for x in ["EUR","GBP","JPY","XAU","XAG","CHF","CAD","AUD","NZD"]) else "crypto"
                             _pending_alarm[cid]["step"] = "alarm_dir"
-                            ptype_lbl = "🔒 شخصی" if dw.get("ptype") == "private" else "📈 عمومی"
+                            ptype_lbl = "🔒 شخصی" if dw.get("ptype") == "private" else "🌐 تیمی"
                             if bot_msg_id:
-                                _alarm_edit(token, cid, bot_msg_id,
-                                    f"🔔 <b>{sym_w}</b>  {ptype_lbl}\n\nجهت رو انتخاب کن:\n📈 BUY   یا   📉 SELL")
+                                edit_tg_keyboard(token, cid, bot_msg_id,
+                                    f"🔔 <b>{sym_w}</b>  ({ptype_lbl})\n\nجهت معامله رو انتخاب کن:",
+                                    [
+                                        [{"text": "📈 BUY", "callback_data": f"alarm_dir:{cid}:buy"},
+                                         {"text": "📉 SELL", "callback_data": f"alarm_dir:{cid}:sell"}],
+                                        [{"text": "❌ انصراف", "callback_data": f"flow_cancel:{cid}"}]
+                                    ])
 
                     elif step == "alarm_dir":
-                        if txt in ("📈 BUY","BUY","buy","بای"):
-                            dw["condition"] = "below"
-                            dir_lbl = "📈 BUY"
-                        elif txt in ("📉 SELL","SELL","sell","سل"):
-                            dw["condition"] = "above"
-                            dir_lbl = "📉 SELL"
-                        else:
-                            if bot_msg_id:
-                                _alarm_edit(token, cid, bot_msg_id,
-                                    f"🔔 <b>{dw.get('symbol','')}</b>\n\n⚠️ لطفاً BUY یا SELL بنویس:")
-                            return
-                        _pending_alarm[cid]["step"] = "alarm_price"
+                        # این step از inline callback میاد (alarm_dir:cid:buy|sell)
+                        # اگه کاربر text فرستاد، remind کن
                         if bot_msg_id:
-                            _alarm_edit(token, cid, bot_msg_id,
-                                f"🔔 <b>{dw['symbol']}</b>  {dir_lbl}\n\nقیمت هدف رو بنویس:")
+                            edit_tg_keyboard(token, cid, bot_msg_id,
+                                f"🔔 <b>{dw.get('symbol','')}</b>\n\nلطفاً از دکمه‌های زیر انتخاب کن:",
+                                [
+                                    [{"text": "📈 BUY", "callback_data": f"alarm_dir:{cid}:buy"},
+                                     {"text": "📉 SELL", "callback_data": f"alarm_dir:{cid}:sell"}],
+                                    [{"text": "❌ انصراف", "callback_data": f"flow_cancel:{cid}"}]
+                                ])
 
                     elif step == "alarm_price":
                         try:
@@ -1714,16 +1865,21 @@ def _do_update(upd, token):
                             _pending_alarm[cid]["step"] = "alarm_comment"
                             dir_lbl2 = "📈 BUY" if dw["condition"] == "below" else "📉 SELL"
                             if bot_msg_id:
-                                _alarm_edit(token, cid, bot_msg_id,
+                                edit_tg_keyboard(token, cid, bot_msg_id,
                                     f"🔔 <b>{dw['symbol']}</b>  {dir_lbl2}  @  <code>{fmt_price(dw['target_price'], dw['symbol'])}</code>\n\n"
-                                    f"یادداشت بنویس یا «✅ ثبت» بزن:")
+                                    f"یادداشت بنویس یا بدون یادداشت ثبت کن:",
+                                    [
+                                        [{"text": "✅ ثبت بدون یادداشت", "callback_data": f"alarm_submit:{cid}"}],
+                                        [{"text": "❌ انصراف", "callback_data": f"flow_cancel:{cid}"}]
+                                    ])
                         except ValueError:
                             if bot_msg_id:
-                                _alarm_edit(token, cid, bot_msg_id,
-                                    f"🔔 <b>{dw.get('symbol','')}</b>\n\n❌ عدد نامعتبر. مثال: <code>1.08500</code> یا <code>2350</code>\n\nدوباره قیمت هدف رو بنویس:")
+                                edit_tg_keyboard(token, cid, bot_msg_id,
+                                    f"🔔 <b>{dw.get('symbol','')}</b>\n\n❌ عدد نامعتبر. مثال: <code>1.08500</code> یا <code>2350</code>\n\nدوباره قیمت هدف رو بنویس:",
+                                    [[{"text": "❌ انصراف", "callback_data": f"flow_cancel:{cid}"}]])
 
                     elif step == "alarm_comment":
-                        comment_w = "" if txt == "✅ ثبت بدون یادداشت" else txt
+                        comment_w = "" if txt in ("✅ ثبت بدون یادداشت", "✅ ثبت") else txt
                         is_private_w = dw.get("ptype","public") == "private"
                         sender_name_w = _get_user_custom_name(cid) or uname
                         sym_f = dw["symbol"]
@@ -1745,17 +1901,17 @@ def _do_update(upd, token):
                         _cache_alerts = d2
                         del _pending_alarm[cid]
                         dir_lbl_f = "📈 BUY" if new_alert_w["condition"] == "below" else "📉 SELL"
-                        priv_lbl_f = "  🔒" if is_private_w else ""
+                        priv_lbl_f = "  🔒 شخصی" if is_private_w else "  🌐 تیمی"
                         confirm_txt_f = (
-                            f"✅ <b>{sym_f}</b>  {dir_lbl_f}  @  <code>{fmt_price(new_alert_w['target_price'], sym_f)}</code>{priv_lbl_f}\n"
+                            f"✅ <b>آلارم ثبت شد!</b>\n\n"
+                            f"💰 <b>{sym_f}</b>  {dir_lbl_f}{priv_lbl_f}\n"
+                            f"🎯 هدف: <code>{fmt_price(new_alert_w['target_price'], sym_f)}</code>\n"
                             + (f"💬 {comment_w}\n" if comment_w else "")
-                            + "آلارم ثبت شد ✔️"
+                            + f"\n⏰ {now_teh()} (تهران)"
                         )
-                        # ادیت پیام به تأیید نهایی
+                        # ادیت پیام اصلی به تأیید نهایی — هیچ پیام جدیدی فرستاده نمیشه
                         if bot_msg_id:
-                            _alarm_edit(token, cid, bot_msg_id, confirm_txt_f)
-                        is_adm_f = (cid == YOUR_CHAT_ID)
-                        show_main_menu(token, cid, "از منوی زیر انتخاب کن 👇", is_adm_f)
+                            edit_tg_keyboard(token, cid, bot_msg_id, confirm_txt_f, [])
                         def _bgw(alert=new_alert_w, s=sym_f, t=atype_f):
                             try:
                                 cur = get_price(s, t)
@@ -1769,40 +1925,43 @@ def _do_update(upd, token):
                     elif step == "sos_symbol":
                         sym_w2 = txt.upper().replace("/","")
                         if len(sym_w2) < 2:
-                            send_reply_keyboard(token, cid,
-                                "❌ نماد نامعتبر. مثال: EURUSD، XAUUSD، BTC",
-                                [["❌ انصراف"]])
+                            if bot_msg_id:
+                                edit_tg_keyboard(token, cid, bot_msg_id,
+                                    "⚡ <b>آلارم فوری</b>\n\n❌ نماد نامعتبر.\nمثال: <code>EURUSD</code>  <code>XAUUSD</code>  <code>BTC</code>",
+                                    [[{"text": "❌ انصراف", "callback_data": f"flow_cancel:{cid}"}]])
                         else:
                             dw["symbol"] = sym_w2
                             _pending_alarm[cid]["step"] = "sos_dir"
-                            threading.Thread(target=delete_chat_history, args=(token, cid), daemon=True).start()
-                            send_reply_keyboard(token, cid,
-                                f"⚡ <b>آلارم فوری</b>  <b>{sym_w2}</b>\n\nجهت رو انتخاب کن:", DIR_MENU)
+                            if bot_msg_id:
+                                edit_tg_keyboard(token, cid, bot_msg_id,
+                                    f"⚡ <b>آلارم فوری</b>  ─  <b>{sym_w2}</b>\n\nجهت معامله رو انتخاب کن:",
+                                    [
+                                        [{"text": "📈 BUY", "callback_data": f"sos_dir:{cid}:buy"},
+                                         {"text": "📉 SELL", "callback_data": f"sos_dir:{cid}:sell"}],
+                                        [{"text": "❌ انصراف", "callback_data": f"flow_cancel:{cid}"}]
+                                    ])
 
                     elif step == "sos_dir":
-                        if txt in ("📈 BUY","BUY","buy","بای"):
-                            dw["condition"] = "below"
-                            dw["dir_lbl"] = "📈 BUY"
-                        elif txt in ("📉 SELL","SELL","sell","سل"):
-                            dw["condition"] = "above"
-                            dw["dir_lbl"] = "📉 SELL"
-                        else:
-                            send_reply_keyboard(token, cid, "⚠️ لطفاً یکی از دکمه‌ها رو بزن:", DIR_MENU)
-                            return
-                        _pending_alarm[cid]["step"] = "sos_comment"
-                        threading.Thread(target=delete_chat_history, args=(token, cid), daemon=True).start()
-                        send_reply_keyboard(token, cid,
-                            f"⚡ <b>{dw['symbol']}</b>  {dw['dir_lbl']}\n\nیادداشت اختیاری:",
-                            [["✅ ارسال بدون یادداشت"], ["❌ انصراف"]])
+                        # این step دیگه از text نمیاد — از callback میاد (sos_dir:cid:buy/sell)
+                        # اگه کاربر text فرستاد، remind کن که از دکمه استفاده کنه
+                        if bot_msg_id:
+                            edit_tg_keyboard(token, cid, bot_msg_id,
+                                f"⚡ <b>آلارم فوری</b>  ─  <b>{dw.get('symbol','')}</b>\n\nلطفاً از دکمه‌های زیر انتخاب کن:",
+                                [
+                                    [{"text": "📈 BUY", "callback_data": f"sos_dir:{cid}:buy"},
+                                     {"text": "📉 SELL", "callback_data": f"sos_dir:{cid}:sell"}],
+                                    [{"text": "❌ انصراف", "callback_data": f"flow_cancel:{cid}"}]
+                                ])
 
                     elif step == "sos_comment":
-                        comment_s = "" if txt in ("✅ ارسال بدون یادداشت",) else txt
+                        comment_s = "" if txt in ("✅ ارسال بدون یادداشت", "ارسال") else txt
                         sym_s = dw["symbol"]
                         condition_s = dw["condition"]
                         atype_s = "forex" if any(x in sym_s for x in ["EUR","GBP","JPY","XAU","XAG","CHF","CAD","AUD","NZD"]) else "crypto"
                         sender_s = _get_user_custom_name(cid) or uname
                         hashtag_s = "#" + re.sub(r"[^\w]","_", sender_s).strip("_")
                         arrow_s = "📈 ناحیه سل" if condition_s == "above" else "📉 ناحیه بای"
+                        dir_lbl_s = dw.get("dir_lbl", "📈 BUY" if condition_s == "below" else "📉 SELL")
                         try: cur_s = get_price(sym_s, atype_s)
                         except: cur_s = None
                         out_s = (
@@ -1818,11 +1977,17 @@ def _do_update(upd, token):
                         _, all_cids2, _ = _get_token_and_cids()
                         targets2 = all_cids2 if BROADCAST_MODE else [YOUR_CHAT_ID]
                         del _pending_alarm[cid]
+                        # ادیت پیام اصلی به تأییدیه
+                        if bot_msg_id:
+                            edit_tg_keyboard(token, cid, bot_msg_id,
+                                f"✅ <b>آلارم فوری ارسال شد!</b>\n\n"
+                                f"💰 <b>{sym_s}</b>  {dir_lbl_s}\n"
+                                + (f"💬 {comment_s}\n" if comment_s else "")
+                                + f"⏰ {now_pretty()} (تهران)", [])
+                        # broadcast به بقیه
                         for tc2 in targets2:
                             kb2 = [[{"text": "⏰ هشدار دوره‌ای", "callback_data": f"set_reminder:{tc2}:{sym_s}"}]]
                             send_tg_keyboard(token, str(tc2), out_s, kb2, track=False)
-                        # چت رو پاک کن
-                        threading.Thread(target=delete_chat_history, args=(token, cid), daemon=True).start()
 
                     elif step == "broadcast_text":
                         _, all_cids3, _ = _get_token_and_cids()
