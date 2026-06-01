@@ -75,6 +75,7 @@ def _sb_upsert_alert(a):
             "created_at":   a.get("created_at", now_teh()),
             "comment":      a.get("comment",""),
             "is_private":   bool(a.get("is_private", False)),
+            "private_cid":  str(a.get("private_cid","")) if a.get("private_cid") else None,
             "notify_only":  str(a.get("notify_only","")) if a.get("notify_only") else None,
             "active":       bool(a.get("active", True)),
             "last_price":   float(a["last_price"]) if a.get("last_price") is not None else None,
@@ -154,6 +155,7 @@ def _sb_load_all_alerts():
                 "created_at":   row.get("created_at",""),
                 "comment":      row.get("comment",""),
                 "is_private":   row.get("is_private", False),
+                "private_cid":  row.get("private_cid") or row.get("notify_only"),
                 "notify_only":  row.get("notify_only"),
                 "active":       row.get("active", True),
                 "last_price":   row.get("last_price"),
@@ -871,6 +873,26 @@ def _get_sender_name(msg):
     un = u.get("username", "")
     return (fn + " " + ln).strip() or ("@" + un if un else "ناشناس")
 
+
+def _build_myalerts_section(alerts_list, title, start_idx=1):
+    """ساخت متن و keyboard برای نمایش لیست آلارم"""
+    if not alerts_list:
+        return None, []
+    lines = [f"{title}\n━━━━━━━━━━━━━━━━━━"]
+    kb = []
+    for i, a in enumerate(alerts_list, start_idx):
+        sym2  = a.get("symbol","")
+        tgt2  = a.get("target_price", 0)
+        cond2 = "📈 BUY" if a.get("condition") == "below" else "📉 SELL"
+        cur2  = a.get("last_price")
+        cur_txt = f"  ┆ <code>{fmt_price(cur2, sym2)}</code>" if cur2 else ""
+        cmt2  = f"\n    💬 {a['comment']}" if a.get("comment") else ""
+        lines.append(f"  {i}. <b>{sym2}</b>  {cond2}\n     🎯 <code>{fmt_price(tgt2, sym2)}</code>{cur_txt}{cmt2}")
+        kb.append([{"text": f"🗑 {sym2} {cond2} @ {fmt_price(tgt2, sym2)}", "callback_data": f"del_alert:{a['id']}"}])
+    lines.append("━━━━━━━━━━━━━━━━━━")
+    kb.append([{"text": "✕ بستن", "callback_data": "close_myalerts"}])
+    return "\n".join(lines), kb
+
 def poll_telegram():
     last_id = 0
     while True:
@@ -996,6 +1018,62 @@ def _do_update(upd, token):
                             answer_callback(token_cbq, cbq_id, "هشداری فعال نبود")
                         edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, "✅ همه هشدارهای دوره‌ای کنسل شدن.", [])
 
+                    elif cbq_data.startswith("myalerts:"):
+                        # myalerts:pub:CID / myalerts:priv:CID / myalerts:all:CID
+                        parts_mya = cbq_data.split(":", 2)
+                        mya_type = parts_mya[1] if len(parts_mya) > 1 else "all"
+                        mya_cid  = parts_mya[2] if len(parts_mya) > 2 else cbq_cid
+                        answer_callback(token_cbq, cbq_id)
+                        d_mya = load_alerts()
+                        all_a_mya = d_mya.get("alerts", [])
+                        custom_name_mya = _get_user_custom_name(mya_cid)
+                        pub_mya  = [a for a in all_a_mya if a.get("active") and not a.get("is_private") and a.get("created_by","") == custom_name_mya]
+                        # برای آلارم شخصی: هم private_cid هم notify_only چک کن
+                        priv_mya = [a for a in all_a_mya if a.get("active") and a.get("is_private") and (
+                            str(a.get("private_cid","")) == mya_cid or str(a.get("notify_only","")) == mya_cid
+                        )]
+                        if mya_type == "pub":
+                            txt_mya, kb_mya = _build_myalerts_section(pub_mya, f"🌐 <b>آلارم‌های تیمی</b>  ({len(pub_mya)} مورد)")
+                            if not txt_mya:
+                                edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, "📭 هیچ آلارم تیمی فعالی نداری.", [[{"text":"✕ بستن","callback_data":"close_myalerts"}]])
+                            else:
+                                edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, txt_mya, kb_mya)
+                        elif mya_type == "priv":
+                            txt_mya, kb_mya = _build_myalerts_section(priv_mya, f"🔒 <b>آلارم‌های شخصی</b>  ({len(priv_mya)} مورد)")
+                            if not txt_mya:
+                                edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, "📭 هیچ آلارم شخصی فعالی نداری.", [[{"text":"✕ بستن","callback_data":"close_myalerts"}]])
+                            else:
+                                edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, txt_mya, kb_mya)
+                        else:  # all
+                            combined_mya = pub_mya + priv_mya
+                            if not combined_mya:
+                                edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, "📭 هیچ آلارم فعالی نداری.", [[{"text":"✕ بستن","callback_data":"close_myalerts"}]])
+                            else:
+                                lines_all = [f"📋 <b>همه آلارم‌های من</b>  ({len(combined_mya)} مورد)\n━━━━━━━━━━━━━━━━━━"]
+                                kb_all = []
+                                if pub_mya:
+                                    lines_all.append("\n🌐 <b>تیمی</b>")
+                                    for i, a in enumerate(pub_mya, 1):
+                                        sym2 = a.get("symbol",""); tgt2 = a.get("target_price",0)
+                                        cond2 = "📈 BUY" if a.get("condition") == "below" else "📉 SELL"
+                                        cur2 = a.get("last_price")
+                                        cur_txt = f"  ┆ <code>{fmt_price(cur2,sym2)}</code>" if cur2 else ""
+                                        lines_all.append(f"  {i}. <b>{sym2}</b>  {cond2}  🎯 <code>{fmt_price(tgt2,sym2)}</code>{cur_txt}")
+                                        kb_all.append([{"text":f"🗑 {sym2} {cond2} @ {fmt_price(tgt2,sym2)}","callback_data":f"del_alert:{a['id']}"}])
+                                if priv_mya:
+                                    lines_all.append("\n🔒 <b>شخصی</b>")
+                                    start2 = len(pub_mya)+1
+                                    for i, a in enumerate(priv_mya, start2):
+                                        sym2 = a.get("symbol",""); tgt2 = a.get("target_price",0)
+                                        cond2 = "📈 BUY" if a.get("condition") == "below" else "📉 SELL"
+                                        cur2 = a.get("last_price")
+                                        cur_txt = f"  ┆ <code>{fmt_price(cur2,sym2)}</code>" if cur2 else ""
+                                        lines_all.append(f"  {i}. <b>{sym2}</b>  {cond2}  🎯 <code>{fmt_price(tgt2,sym2)}</code>{cur_txt}")
+                                        kb_all.append([{"text":f"🗑 {sym2} {cond2} @ {fmt_price(tgt2,sym2)}","callback_data":f"del_alert:{a['id']}"}])
+                                lines_all.append("\n━━━━━━━━━━━━━━━━━━")
+                                kb_all.append([{"text":"✕ بستن","callback_data":"close_myalerts"}])
+                                edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, "\n".join(lines_all), kb_all)
+
                     elif cbq_data == "admin:news" and (cbq_cid == YOUR_CHAT_ID or BROADCAST_MODE):
                         answer_callback(token_cbq, cbq_id, "در حال دریافت اخبار...")
                         def _bg_news(tok=token_cbq, c=cbq_cid):
@@ -1117,43 +1195,14 @@ def _do_update(upd, token):
                         f"⏱ {now_pretty()} (تهران)", is_adm)
 
                 elif txt == "⭐ آلارم‌های من":
-                    custom_name = _get_user_custom_name(cid)
-                    d2 = load_alerts()
-                    all_a = d2.get("alerts", [])
-                    pub  = [a for a in all_a if a.get("active") and not a.get("is_private") and a.get("created_by","") == custom_name]
-                    priv = [a for a in all_a if a.get("active") and a.get("is_private") and str(a.get("private_cid","")) == cid]
                     is_adm = (cid == YOUR_CHAT_ID or BROADCAST_MODE)
-                    if not pub and not priv:
-                        show_main_menu(token, cid, "📭 هیچ آلارم فعالی نداری.", is_adm)
-                    else:
-                        lines = [f"📋 <b>آلارم‌های من</b>  (<code>{len(pub)+len(priv)}</code> مورد فعال)\n━━━━━━━━━━━━━━━━━━"]
-                        kb = []
-                        if pub:
-                            lines.append("\n🌐 <b>آلارم‌های تیمی</b>")
-                            for i, a in enumerate(pub, 1):
-                                sym2 = a.get("symbol","")
-                                tgt2 = a.get("target_price", 0)
-                                cond2 = "📈 BUY" if a.get("condition") == "below" else "📉 SELL"
-                                cur2  = a.get("last_price")
-                                cur_txt = f"  ┆ لحظه‌ای: <code>{fmt_price(cur2, sym2)}</code>" if cur2 else ""
-                                cmt2 = f"\n    💬 {a['comment']}" if a.get("comment") else ""
-                                lines.append(f"  {i}. <b>{sym2}</b>  {cond2}  🎯 <code>{fmt_price(tgt2, sym2)}</code>{cur_txt}{cmt2}")
-                                kb.append([{"text": f"🗑 حذف: {sym2} {cond2} @ {fmt_price(tgt2, sym2)}", "callback_data": f"del_alert:{a['id']}"}])
-                        if priv:
-                            lines.append("\n🔒 <b>آلارم‌های شخصی</b>")
-                            start = len(pub) + 1
-                            for i, a in enumerate(priv, start):
-                                sym2 = a.get("symbol","")
-                                tgt2 = a.get("target_price", 0)
-                                cond2 = "📈 BUY" if a.get("condition") == "below" else "📉 SELL"
-                                cur2  = a.get("last_price")
-                                cur_txt = f"  ┆ لحظه‌ای: <code>{fmt_price(cur2, sym2)}</code>" if cur2 else ""
-                                cmt2 = f"\n    💬 {a['comment']}" if a.get("comment") else ""
-                                lines.append(f"  {i}. <b>{sym2}</b>  {cond2}  🎯 <code>{fmt_price(tgt2, sym2)}</code>{cur_txt}{cmt2}")
-                                kb.append([{"text": f"🗑 حذف: {sym2} {cond2} @ {fmt_price(tgt2, sym2)}", "callback_data": f"del_alert:{a['id']}"}])
-                        lines.append("\n━━━━━━━━━━━━━━━━━━")
-                        kb.append([{"text": "✕ بستن", "callback_data": "close_myalerts"}])
-                        send_tg_keyboard(token, cid, "\n".join(lines), kb)
+                    # اول دو دکمه نشون بده — تیمی / شخصی
+                    btns = [[{"text": "🌐 آلارم‌های تیمی", "callback_data": f"myalerts:pub:{cid}"}]]
+                    if is_adm:
+                        btns.append([{"text": "🔒 آلارم‌های شخصی", "callback_data": f"myalerts:priv:{cid}"}])
+                    btns.append([{"text": "📋 همه آلارم‌های من", "callback_data": f"myalerts:all:{cid}"}])
+                    btns.append([{"text": "✕ بستن", "callback_data": "close_myalerts"}])
+                    send_tg_keyboard(token, cid, "⭐ <b>آلارم‌های من</b>\n\nکدوم رو می‌خوای ببینی؟", btns)
 
                 elif txt == "⏰ هشدار دوره‌ای من":
                     text_msg2, kb2 = build_cancel_reminder_msg(cid)
@@ -1180,9 +1229,12 @@ def _do_update(upd, token):
 
                 elif txt == "📈 آلارم جدید" and (cid == YOUR_CHAT_ID or BROADCAST_MODE):
                     _pending_alarm[cid] = {"step": "alarm_symbol", "data": {"ptype": "public"}}
-                    remove_reply_keyboard(token, cid,
-                        "📈 <b>آلارم جدید</b> — مرحله ۱/۴\n\nنماد را بنویس:\n"
-                        "<code>EURUSD</code>  <code>XAUUSD</code>  <code>BTC</code>")
+                    send_reply_keyboard(token, cid,
+                        "📍 <b>مرحله ۱ از ۴</b> — نماد\n\n"
+                        "نماد رو بنویس:\n"
+                        "<code>EURUSD</code>  <code>XAUUSD</code>  <code>BTC</code>\n\n"
+                        "<i>مثال: XAUUSD یا BTC</i>",
+                        [["❌ انصراف"]])
 
                 elif txt == "🔒 آلارم شخصی":
                     if cid != YOUR_CHAT_ID and not BROADCAST_MODE:
@@ -1190,13 +1242,19 @@ def _do_update(upd, token):
                         show_main_menu(token, cid, "⚠️ این قابلیت فعلاً در دسترس نیست.", is_adm)
                     else:
                         _pending_alarm[cid] = {"step": "alarm_symbol", "data": {"ptype": "private"}}
-                        remove_reply_keyboard(token, cid,
-                            "🔒 <b>آلارم شخصی</b> — مرحله ۱/۴\n\nنماد را بنویس:\n"
-                            "<code>EURUSD</code>  <code>XAUUSD</code>  <code>BTC</code>")
+                        send_reply_keyboard(token, cid,
+                            "📍 <b>مرحله ۱ از ۴</b> — نماد  🔒 شخصی\n\n"
+                            "نماد رو بنویس:\n"
+                            "<code>EURUSD</code>  <code>XAUUSD</code>  <code>BTC</code>\n\n"
+                            "<i>مثال: XAUUSD یا BTC</i>",
+                            [["❌ انصراف"]])
 
                 elif txt == "⚡ آلارم فوری" and (cid == YOUR_CHAT_ID or BROADCAST_MODE):
                     _pending_alarm[cid] = {"step": "sos_symbol", "data": {}}
-                    remove_reply_keyboard(token, cid, "⚡ <b>آلارم فوری</b>\n\nنماد را بنویس:")
+                    send_reply_keyboard(token, cid,
+                        "⚡ <b>آلارم فوری</b>\n\nنماد رو بنویس:\n"
+                        "<code>EURUSD</code>  <code>XAUUSD</code>  <code>BTC</code>",
+                        [["❌ انصراف"]])
 
                 elif cid in _pending_alarm and not txt.startswith("/"):
                     step = _pending_alarm[cid]["step"]
@@ -1235,14 +1293,14 @@ def _do_update(upd, token):
                             send_reply_keyboard(token, cid, "⚠️ لطفاً یکی از دکمه‌ها رو بزن:", DIR_MENU)
                             return
                         _pending_alarm[cid]["step"] = "alarm_price"
-                        remove_reply_keyboard(token, cid,
+                        send_reply_keyboard(token, cid,
                             f"📍 <b>مرحله ۳ از ۴</b> — قیمت هدف\n"
                             f"┌─────────────────┐\n"
                             f"│ نماد: <b>{dw['symbol']}</b>\n"
                             f"│ جهت:  {dir_lbl}\n"
                             f"└─────────────────┘\n\n"
-                            f"قیمت هدف رو بنویس:\n"
-                            f"<i>برای برگشت بنویس: ↩️ برگشت</i>")
+                            f"قیمت هدف رو تایپ کن:",
+                            [["↩️ برگشت", "❌ انصراف"]])
 
                     elif step == "alarm_price":
                         try:
@@ -1306,7 +1364,9 @@ def _do_update(upd, token):
                     elif step == "sos_symbol":
                         sym_w2 = txt.upper().replace("/","")
                         if len(sym_w2) < 2:
-                            send_tg(token, cid, "❌ نماد نامعتبر. مثال: EURUSD، XAUUSD، BTC")
+                            send_reply_keyboard(token, cid,
+                                "❌ نماد نامعتبر. مثال: EURUSD، XAUUSD، BTC",
+                                [["❌ انصراف"]])
                         else:
                             dw["symbol"] = sym_w2
                             _pending_alarm[cid]["step"] = "sos_dir"
@@ -1538,11 +1598,13 @@ def _do_update(upd, token):
                         send_tg(token, cid, text_msg)
 
                 elif txt.startswith("/myalerts"):
-                    text_msg, keyboard = build_myalerts_msg(cid)
-                    if keyboard:
-                        send_tg_keyboard(token, cid, text_msg, keyboard)
-                    else:
-                        send_tg(token, cid, text_msg)
+                    is_adm2 = (cid == YOUR_CHAT_ID or BROADCAST_MODE)
+                    btns2 = [[{"text": "🌐 آلارم‌های تیمی", "callback_data": f"myalerts:pub:{cid}"}]]
+                    if is_adm2:
+                        btns2.append([{"text": "🔒 آلارم‌های شخصی", "callback_data": f"myalerts:priv:{cid}"}])
+                    btns2.append([{"text": "📋 همه آلارم‌های من", "callback_data": f"myalerts:all:{cid}"}])
+                    btns2.append([{"text": "✕ بستن", "callback_data": "close_myalerts"}])
+                    send_tg_keyboard(token, cid, "⭐ <b>آلارم‌های من</b>\n\nکدوم رو می‌خوای ببینی؟", btns2)
 
                 elif txt.startswith("/news") and cid == YOUR_CHAT_ID:
                     send_tg(token, cid, "⏳ در حال دریافت تقویم اقتصادی...")
