@@ -845,7 +845,8 @@ def _build_signal_text(sig: dict) -> str:
     tp3_txt = c(tp3) if tp3 else "<code>-</code>"
 
     return (
-        f"#{sig_id}#{sym}\n"
+        f"#{sig_id}\n"
+        f"#{sym}\n"
         f"{dir_txt}\n"
         f"➡️ Entry: {c(entry)}\n"
         f"🛑 SL: {c(sl)}\n"
@@ -885,7 +886,8 @@ def _show_signal_preview(token, cid, mid, data):
          {"text": "🎯 TP2/TP3", "callback_data": f"sig_tp:{cid}"}],
         [{"text": "📝 یادداشت", "callback_data": f"sig_note:{cid}"},
          {"text": "🔄 ریوارد", "callback_data": f"sig_recalc:{cid}"}],
-        [{"text": "✅ ارسال سیگنال", "callback_data": f"sig_send:{cid}"}],
+        [{"text": "📤 ارسال به گروه", "callback_data": f"sig_send:{cid}:channel"},
+         {"text": "💾 ثبت در دیتا", "callback_data": f"sig_send:{cid}:dbonly"}],
         [{"text": "❌ لغو", "callback_data": f"sig_cancel:{cid}"}],
     ]
     edit_tg_keyboard(token, cid, mid, preview, kb)
@@ -1828,32 +1830,94 @@ def _do_update(upd, token):
                         ps["step"] = "sig_preview"
                         _show_signal_preview(token_cbq, cbq_cid, cbq_msg_id, ps["data"])
 
+                    elif cbq_data.startswith("signals_view:"):
+                        # نمایش لیست سیگنال‌ها
+                        parts_sv = cbq_data.split(":", 2)
+                        sv_cid  = parts_sv[1]
+                        sv_mode = parts_sv[2]  # mine | all
+                        answer_callback(token_cbq, cbq_id, "⏳ در حال بارگذاری...")
+                        sigs = _sb_load_signals(limit=20)
+                        if sv_mode == "mine":
+                            my_name = _get_user_custom_name(sv_cid) or sv_cid
+                            sigs = [s for s in sigs if s.get("sent_by","") == my_name]
+                            title = f"📡 <b>سیگنال‌های من</b>"
+                        else:
+                            title = f"📊 <b>همه سیگنال‌ها</b>"
+                        if not sigs:
+                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                                f"{title}\n\n📭 سیگنالی یافت نشد.",
+                                [[{"text": "↩️ بازگشت", "callback_data": f"signals_close:{sv_cid}"}]])
+                            return
+                        lines = [title, ""]
+                        for s in sigs:
+                            sym_sv   = s.get("symbol","")
+                            sid_sv   = s.get("id","")
+                            dir_sv   = s.get("direction","")
+                            entry_sv = s.get("entry")
+                            sl_sv    = s.get("sl")
+                            tp1_sv   = s.get("tp1")
+                            tf_sv    = s.get("tf","")
+                            sent_by_sv = s.get("sent_by","")
+                            sent_at_sv = s.get("sent_at","")[:16] if s.get("sent_at") else ""
+                            ch_mid_sv  = s.get("channel_msg_id")
+                            # آیکون ارسال به کانال یا فقط DB
+                            origin = "📤" if ch_mid_sv else "💾"
+                            dir_short = {"buy_limit":"BL↗","buy_stop":"BS↗",
+                                         "sell_limit":"SL↘","sell_stop":"SS↘"}.get(dir_sv, dir_sv)
+                            lines.append(
+                                f"{origin} <b>{sid_sv}</b>  #{sym_sv}  <i>{dir_short}</i>\n"
+                                f"   ➡️ <code>{_fmt_signal_price(entry_sv,sym_sv)}</code>  "
+                                f"🛑 <code>{_fmt_signal_price(sl_sv,sym_sv)}</code>  "
+                                f"🎯 <code>{_fmt_signal_price(tp1_sv,sym_sv)}</code>\n"
+                                f"   ⏱ {tf_sv}  👤 {sent_by_sv}  🕐 {sent_at_sv}"
+                            )
+                            lines.append("──────────────────")
+                        legend = "\n📤 = ارسال به گروه   💾 = فقط ثبت دیتا"
+                        kb_sv = [
+                            [{"text": "📡 سیگنال‌های من", "callback_data": f"signals_view:{sv_cid}:mine"},
+                             {"text": "📊 همه سیگنال‌ها", "callback_data": f"signals_view:{sv_cid}:all"}],
+                            [{"text": "✕ بستن", "callback_data": f"signals_close:{sv_cid}"}]
+                        ]
+                        full_text = "\n".join(lines) + legend
+                        # تلگرام max 4096 کاراکتر
+                        if len(full_text) > 4000:
+                            full_text = full_text[:3980] + "\n\n<i>... (برای دیدن بیشتر فیلتر کن)</i>"
+                        edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, full_text, kb_sv)
+
+                    elif cbq_data.startswith("signals_close:"):
+                        answer_callback(token_cbq, cbq_id, "بسته شد")
+                        try:
+                            requests.post(
+                                f"https://api.telegram.org/bot{token_cbq}/deleteMessage",
+                                json={"chat_id": cbq_cid, "message_id": cbq_msg_id},
+                                timeout=8, headers=H)
+                        except: pass
+
                     elif cbq_data.startswith("sig_send:"):
-                        # ارسال نهایی سیگنال
-                        send_cid = cbq_data.split(":",1)[1]
+                        parts_snd = cbq_data.split(":", 2)
+                        send_cid  = parts_snd[1]
+                        send_mode = parts_snd[2] if len(parts_snd) > 2 else "channel"
                         ps = _pending_signal.get(send_cid)
                         if not ps:
                             answer_callback(token_cbq, cbq_id, "⚠️ جلسه منقضی شد")
                             return
-                        answer_callback(token_cbq, cbq_id, "⏳ در حال ارسال...")
+                        answer_callback(token_cbq, cbq_id, "⏳ در حال ثبت...")
                         d_send = ps["data"]
-                        # شماره سیگنال خودکار
                         seq = _sb_next_signal_seq()
                         sig_id = f"S{seq:05d}"
                         d_send["id"] = sig_id
                         d_send["seq"] = seq
                         d_send["sent_by"] = _get_user_custom_name(send_cid) or send_cid
                         d_send["sent_at"] = now_teh()
-                        d_send["status"] = "active"
+                        d_send["status"]  = "active"
                         d_send["channel_msg_id"] = None
-                        # ارسال به کانال
-                        sig_text = _build_signal_text(d_send)
+                        # ارسال به کانال فقط در حالت channel
                         channel_mid = None
-                        if SIGNAL_CHANNEL:
+                        if send_mode == "channel" and SIGNAL_CHANNEL:
                             try:
                                 r_ch = requests.post(
                                     f"https://api.telegram.org/bot{token_cbq}/sendMessage",
-                                    json={"chat_id": SIGNAL_CHANNEL, "text": sig_text,
+                                    json={"chat_id": SIGNAL_CHANNEL, "text": _build_signal_text(d_send),
                                           "parse_mode": "HTML"},
                                     timeout=10, headers=H)
                                 if r_ch.status_code == 200:
@@ -1861,13 +1925,16 @@ def _do_update(upd, token):
                                     d_send["channel_msg_id"] = channel_mid
                             except Exception as e:
                                 print(f"[signal] channel send error: {e}")
-                        # ذخیره در Supabase
+                        # همیشه در Supabase ذخیره میشه
                         threading.Thread(target=_sb_save_signal, args=(d_send,), daemon=True).start()
                         del _pending_signal[send_cid]
-                        # تأییدیه به کاربر
-                        ch_note = f"\n📢 ارسال شد به کانال (msg #{channel_mid})" if channel_mid else "\n⚠️ کانال تنظیم نشده — فقط ذخیره شد"
+                        sig_text_conf = _build_signal_text(d_send)
+                        if send_mode == "channel":
+                            status_line = f"📤 ارسال شد به گروه" if channel_mid else "⚠️ کانال تنظیم نشده — فقط ذخیره شد"
+                        else:
+                            status_line = "💾 فقط در دیتابیس ثبت شد"
                         edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
-                            f"✅ <b>سیگنال {sig_id} ثبت شد!</b>{ch_note}\n\n{sig_text}", [])
+                            f"✅ <b>سیگنال {sig_id} ثبت شد</b>  {status_line}\n\n{sig_text_conf}", [])
 
                     elif cbq_data.startswith("alarm_dir:"):
                         # alarm_dir:cid:buy|sell
@@ -2112,6 +2179,8 @@ def _do_update(upd, token):
                     if not has_priv:
                         status_kb.append([{"text": "📩 درخواست فعال‌سازی آلارم شخصی", "callback_data": f"req_private:{cid}"}])
                     status_kb.append([{"text": "✏️ ویرایش اسم", "callback_data": f"edit_name:{cid}"}])
+                    status_kb.append([{"text": "📡 سیگنال‌های من", "callback_data": f"signals_view:{cid}:mine"},
+                                      {"text": "📊 همه سیگنال‌ها", "callback_data": f"signals_view:{cid}:all"}])
                     send_tg_keyboard(token, cid, status_text, status_kb)
 
                 elif txt == "⭐ آلارم‌های من":
