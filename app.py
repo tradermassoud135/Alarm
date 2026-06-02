@@ -729,6 +729,167 @@ def _delete_msg_after(token, cid, msg_id, delay=120):
         except: pass
     threading.Thread(target=_do, daemon=True).start()
 
+# =====================================================================
+# 📡 سیستم سیگنال
+# =====================================================================
+
+SIGNAL_CHANNEL = os.environ.get("SIGNAL_CHANNEL", "")  # مثلاً @mychannel یا chat_id
+
+def _sb_next_signal_seq():
+    """شماره سیگنال بعدی رو از Supabase بگیر — atomic counter"""
+    if not SUPABASE_KEY: return int(time.time()) % 100000
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/signals?select=seq&order=seq.desc&limit=1",
+            headers=_sb_h(), timeout=8)
+        if r.status_code == 200 and r.json():
+            return r.json()[0]["seq"] + 1
+        return 10001
+    except:
+        return int(time.time()) % 100000
+
+def _sb_save_signal(sig: dict):
+    """ذخیره سیگنال در Supabase"""
+    if not SUPABASE_KEY: return
+    try:
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/signals",
+            headers={**_sb_h(), "Prefer": "resolution=merge-duplicates,return=minimal"},
+            json=sig, timeout=10)
+        if r.status_code not in (200, 201, 204):
+            print(f"[signal] save error: {r.status_code} {r.text[:80]}")
+    except Exception as e:
+        print(f"[signal] save exc: {e}")
+
+def _sb_update_signal(sig_id, patch: dict):
+    """آپدیت یه فیلد سیگنال"""
+    if not SUPABASE_KEY: return
+    try:
+        requests.patch(
+            f"{SUPABASE_URL}/rest/v1/signals?id=eq.{sig_id}",
+            headers={**_sb_h(), "Prefer": "return=minimal"},
+            json=patch, timeout=8)
+    except: pass
+
+def _sb_load_signals(limit=10):
+    """آخرین سیگنال‌ها رو بخون"""
+    if not SUPABASE_KEY: return []
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/signals?select=*&order=sent_at.desc&limit={limit}",
+            headers=_sb_h(), timeout=8)
+        if r.status_code == 200: return r.json()
+    except: pass
+    return []
+
+def _calc_signal(symbol: str, direction: str, entry: float, sl: float, rr: float = 1.5):
+    """
+    محاسبه TP بر اساس Entry، SL و ریوارد.
+    direction: buy_limit / buy_stop / sell_limit / sell_stop
+    برمیگردونه: (sl_calc, tp1, risk_pips)
+    """
+    is_buy = direction.startswith("buy")
+    risk = abs(entry - sl)
+    mul = get_pip_multiplier(symbol)
+    risk_pips = round(risk * mul, 1)
+    if is_buy:
+        tp1 = round(entry + risk * rr, 5)
+    else:
+        tp1 = round(entry - risk * rr, 5)
+    return sl, tp1, risk_pips
+
+def _sl_from_pips(symbol: str, direction: str, entry: float, pips: float):
+    """محاسبه SL از روی پیپ"""
+    mul = get_pip_multiplier(symbol)
+    dist = pips / mul
+    is_buy = direction.startswith("buy")
+    sl = round(entry - dist if is_buy else entry + dist, 5)
+    return sl
+
+def _fmt_signal_price(p, symbol=""):
+    """فرمت عدد برای نمایش در سیگنال"""
+    if p is None: return "—"
+    v = float(p)
+    su = symbol.upper()
+    if any(x in su for x in ['BTC','ETH','SOL','BNB']):
+        return f"{v:.1f}" if v > 1000 else f"{v:.4f}"
+    if "XAU" in su or "XAG" in su: return f"{v:.2f}"
+    if "JPY" in su: return f"{v:.3f}"
+    return f"{v:.5f}"
+
+def _build_signal_text(sig: dict) -> str:
+    """ساخت متن سیگنال — عین فرمت درخواستی، اعداد قابل کپی"""
+    sym     = sig.get("symbol","")
+    d       = sig.get("direction","")
+    entry   = sig.get("entry")
+    sl      = sig.get("sl")
+    tp1     = sig.get("tp1")
+    tp2     = sig.get("tp2")
+    tp3     = sig.get("tp3")
+    tf      = sig.get("tf","H1")
+    sig_id  = sig.get("id","")
+
+    dir_map = {
+        "buy_limit":  "✅ Buy limit",
+        "buy_stop":   "✅ Buy stop",
+        "sell_limit": "🔴 Sell limit",
+        "sell_stop":  "🔴 Sell stop",
+    }
+    dir_txt = dir_map.get(d, d)
+
+    def c(val):
+        if val is None: return "<code>-</code>"
+        return f"<code>{_fmt_signal_price(val, sym)}</code>"
+
+    tp2_txt = c(tp2) if tp2 else "<code>-</code>"
+    tp3_txt = c(tp3) if tp3 else "<code>-</code>"
+
+    return (
+        f"#{sig_id}#{sym}\n"
+        f"{dir_txt}\n"
+        f"➡️ Entry: {c(entry)}\n"
+        f"🛑 SL: {c(sl)}\n"
+        f"🎯 TP:\n"
+        f"TP1: {c(tp1)}\n"
+        f"TP2: {tp2_txt}\n"
+        f"TP3: {tp3_txt}\n"
+        f"⏱ Timeframe: {tf}"
+    )
+
+def _build_signal_preview(sig: dict) -> str:
+    """پیش‌نمایش سیگنال — عین چیزی که به کانال میره"""
+    return _build_signal_text(sig)
+
+# state ثبت سیگنال در حال ساخت
+_pending_signal = {}  # cid → {"step": str, "data": dict, "bot_msg_id": int}
+
+SIGNAL_QUICK_SYMBOLS = ["BTCUSDT", "XAUUSD", "EURUSD", "GBPUSD", "ETHUSDT"]
+SIGNAL_DIRECTIONS = [
+    ("✅ Buy Limit",  "buy_limit"),
+    ("✅ Buy Stop",   "buy_stop"),
+    ("🔴 Sell Limit", "sell_limit"),
+    ("🔴 Sell Stop",  "sell_stop"),
+]
+SIGNAL_TF_OPTIONS = ["M5", "M15", "M30", "H1", "H4", "D1"]
+SIGNAL_DEFAULT_TF = "H1"
+SIGNAL_DEFAULT_RR = 1.5
+
+def _show_signal_preview(token, cid, mid, data):
+    """نمایش پیش‌نمایش سیگنال با دکمه‌های ویرایش"""
+    tf  = data.get("tf", SIGNAL_DEFAULT_TF)
+    note = data.get("note","")
+    note_line = f"\n\n📝 <i>{note}</i>" if note else ""
+    preview = f"<b>── پیش‌نمایش ──</b>\n\n{_build_signal_text(data)}{note_line}"
+    kb = [
+        [{"text": f"⏱ TF: {tf}", "callback_data": f"sig_tf:{cid}"},
+         {"text": "🎯 TP2/TP3", "callback_data": f"sig_tp:{cid}"}],
+        [{"text": "📝 یادداشت", "callback_data": f"sig_note:{cid}"},
+         {"text": "🔄 ریوارد", "callback_data": f"sig_recalc:{cid}"}],
+        [{"text": "✅ ارسال سیگنال", "callback_data": f"sig_send:{cid}"}],
+        [{"text": "❌ لغو", "callback_data": f"sig_cancel:{cid}"}],
+    ]
+    edit_tg_keyboard(token, cid, mid, preview, kb)
+
 def _send_reminder(token, cid, sym):
     """یه پیام یادآوری بفرست با دکمه کنسل"""
     msg = f"⚠️ <b>یادآوری:</b> <code>{sym}</code> بررسی بشه!\n\n🕐 این پیام ۲ دقیقه دیگه پاک میشه."
@@ -936,17 +1097,19 @@ MAIN_MENU = [
     ["📈 آلارم جدید"],
     ["⭐ آلارم‌های من", "📊 وضعیت"],
     ["⚡ آلارم فوری",   "⏰ هشدار دوره‌ای من"],
+    ["📡 سیگنال جدید"],
 ]
 MAIN_MENU_PRIVATE = [
     ["📈 آلارم جدید",  "🔒 آلارم شخصی"],
     ["⭐ آلارم‌های من", "📊 وضعیت"],
     ["⚡ آلارم فوری",   "⏰ هشدار دوره‌ای من"],
+    ["📡 سیگنال جدید"],
 ]
 MAIN_MENU_ADMIN = [
     ["📈 آلارم جدید",  "🔒 آلارم شخصی"],
     ["⭐ آلارم‌های من", "📊 وضعیت"],
     ["⚡ آلارم فوری",   "⏰ هشدار دوره‌ای من"],
-    ["⚙️ پنل ادمین"],
+    ["📡 سیگنال جدید", "⚙️ پنل ادمین"],
 ]
 DIR_MENU = [["📈 BUY", "📉 SELL"], ["❌ انصراف"]]
 
@@ -1474,9 +1637,237 @@ def _do_update(upd, token):
                         # لغو هر flow در حال اجرا (آلارم عادی یا SOS)
                         f_cid = cbq_data.split(":", 1)[1]
                         _pending_alarm.pop(f_cid, None)
+                        _pending_signal.pop(f_cid, None)
                         answer_callback(token_cbq, cbq_id, "لغو شد")
                         edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
                             "❌ <b>عملیات لغو شد.</b>", [])
+
+                    # ── signal callbacks ──────────────────────────────
+                    elif cbq_data.startswith("sig_cancel:"):
+                        sc_cid = cbq_data.split(":",1)[1]
+                        _pending_signal.pop(sc_cid, None)
+                        answer_callback(token_cbq, cbq_id, "لغو شد")
+                        edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                            "❌ <b>ساخت سیگنال لغو شد.</b>", [])
+
+                    elif cbq_data.startswith("sig_sym:"):
+                        # انتخاب نماد از shortcut
+                        parts_ss = cbq_data.split(":", 2)
+                        ss_cid = parts_ss[1]; ss_sym = parts_ss[2]
+                        ps = _pending_signal.get(ss_cid)
+                        if not ps:
+                            answer_callback(token_cbq, cbq_id, "⚠️ جلسه منقضی شد")
+                            return
+                        answer_callback(token_cbq, cbq_id)
+                        ps["data"]["symbol"] = ss_sym
+                        ps["step"] = "sig_direction"
+                        dir_kb = [[{"text": lbl, "callback_data": f"sig_dir:{ss_cid}:{val}"} for lbl,val in SIGNAL_DIRECTIONS[:2]],
+                                  [{"text": lbl, "callback_data": f"sig_dir:{ss_cid}:{val}"} for lbl,val in SIGNAL_DIRECTIONS[2:]],
+                                  [{"text": "❌ انصراف", "callback_data": f"sig_cancel:{ss_cid}"}]]
+                        edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                            f"📡 <b>{ss_sym}</b>\n\nنوع سفارش:", dir_kb)
+
+                    elif cbq_data.startswith("sig_dir:"):
+                        # انتخاب جهت
+                        parts_sd2 = cbq_data.split(":", 2)
+                        sd2_cid = parts_sd2[1]; sd2_dir = parts_sd2[2]
+                        ps = _pending_signal.get(sd2_cid)
+                        if not ps:
+                            answer_callback(token_cbq, cbq_id, "⚠️ جلسه منقضی شد")
+                            return
+                        answer_callback(token_cbq, cbq_id)
+                        dir_lbl_map = {"buy_limit":"✅ Buy Limit","buy_stop":"✅ Buy Stop",
+                                       "sell_limit":"🔴 Sell Limit","sell_stop":"🔴 Sell Stop"}
+                        ps["data"]["direction"] = sd2_dir
+                        ps["data"]["dir_lbl"] = dir_lbl_map.get(sd2_dir, sd2_dir)
+                        ps["step"] = "sig_sl_mode"
+                        sym_sd2 = ps["data"].get("symbol","")
+                        # انتخاب نوع SL
+                        edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                            f"📡 <b>{sym_sd2}</b>  {ps['data']['dir_lbl']}\n\nاستاپ رو چطور میدی؟",
+                            [[{"text": "🔢 عدد مستقیم", "callback_data": f"sig_slmode:{sd2_cid}:price"},
+                              {"text": "📏 پیپ", "callback_data": f"sig_slmode:{sd2_cid}:pip"}],
+                             [{"text": "❌ انصراف", "callback_data": f"sig_cancel:{sd2_cid}"}]])
+
+                    elif cbq_data.startswith("sig_slmode:"):
+                        parts_sm = cbq_data.split(":", 2)
+                        sm_cid = parts_sm[1]; sm_mode = parts_sm[2]
+                        ps = _pending_signal.get(sm_cid)
+                        if not ps:
+                            answer_callback(token_cbq, cbq_id, "⚠️ جلسه منقضی شد")
+                            return
+                        answer_callback(token_cbq, cbq_id)
+                        ps["data"]["sl_mode"] = sm_mode
+                        ps["step"] = "sig_entry_sl"
+                        sym_sm = ps["data"].get("symbol","")
+                        dir_lbl_sm = ps["data"].get("dir_lbl","")
+                        mode_hint = "قیمت SL" if sm_mode == "price" else "پیپ SL"
+                        edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                            f"📡 <b>{sym_sm}</b>  {dir_lbl_sm}\n\n"
+                            f"بنویس:  <code>Entry  {mode_hint}</code>\n"
+                            f"مثال:   <code>73370  {'72550' if sm_mode == 'price' else '82'}</code>",
+                            [[{"text": "❌ انصراف", "callback_data": f"sig_cancel:{sm_cid}"}]])
+
+                    elif cbq_data.startswith("sig_tf:"):
+                        # انتخاب تایم‌فریم
+                        stf_cid = cbq_data.split(":",1)[1]
+                        ps = _pending_signal.get(stf_cid)
+                        if not ps:
+                            answer_callback(token_cbq, cbq_id, "⚠️ جلسه منقضی شد")
+                            return
+                        answer_callback(token_cbq, cbq_id)
+                        cur_tf = ps["data"].get("tf", SIGNAL_DEFAULT_TF)
+                        tf_kb = [[{"text": f"{'✅ ' if tf==cur_tf else ''}{tf}",
+                                   "callback_data": f"sig_settf:{stf_cid}:{tf}"}
+                                  for tf in SIGNAL_TF_OPTIONS[:3]],
+                                 [{"text": f"{'✅ ' if tf==cur_tf else ''}{tf}",
+                                   "callback_data": f"sig_settf:{stf_cid}:{tf}"}
+                                  for tf in SIGNAL_TF_OPTIONS[3:]],
+                                 [{"text": "↩️ بازگشت", "callback_data": f"sig_back:{stf_cid}"}]]
+                        edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                            f"⏱ تایم‌فریم رو انتخاب کن (فعلی: <b>{cur_tf}</b>):", tf_kb)
+
+                    elif cbq_data.startswith("sig_settf:"):
+                        parts_stf = cbq_data.split(":", 2)
+                        stf_cid2 = parts_stf[1]; stf_val = parts_stf[2]
+                        ps = _pending_signal.get(stf_cid2)
+                        if not ps:
+                            answer_callback(token_cbq, cbq_id, "⚠️ جلسه منقضی شد")
+                            return
+                        answer_callback(token_cbq, cbq_id, f"✅ {stf_val}")
+                        ps["data"]["tf"] = stf_val
+                        ps["step"] = "sig_preview"
+                        _show_signal_preview(token_cbq, cbq_cid, cbq_msg_id, ps["data"])
+
+                    elif cbq_data.startswith("sig_tp:"):
+                        stp_cid = cbq_data.split(":",1)[1]
+                        ps = _pending_signal.get(stp_cid)
+                        if not ps:
+                            answer_callback(token_cbq, cbq_id, "⚠️ جلسه منقضی شد")
+                            return
+                        answer_callback(token_cbq, cbq_id)
+                        ps["data"]["_editing_tp"] = "tp2"
+                        ps["step"] = "sig_tp_edit"
+                        cur_tp2 = ps["data"].get("tp2")
+                        edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                            f"🎯 <b>TP2</b> رو بنویس (اختیاری):\n"
+                            + (f"فعلی: <code>{_fmt_signal_price(cur_tp2, ps['data'].get('symbol',''))}</code>\n" if cur_tp2 else "")
+                            + "برای حذف بنویس: <code>0</code>",
+                            [[{"text": "⏭ رد کن", "callback_data": f"sig_skip_tp:{stp_cid}:tp2"},
+                              {"text": "↩️ بازگشت", "callback_data": f"sig_back:{stp_cid}"}]])
+
+                    elif cbq_data.startswith("sig_skip_tp:"):
+                        parts_skp = cbq_data.split(":", 2)
+                        skp_cid = parts_skp[1]; skp_which = parts_skp[2]
+                        ps = _pending_signal.get(skp_cid)
+                        if not ps:
+                            answer_callback(token_cbq, cbq_id, "⚠️ جلسه منقضی شد")
+                            return
+                        answer_callback(token_cbq, cbq_id)
+                        # اگه tp2 رد شد، tp3 رو هم رد کن
+                        ps["data"]["tp2"] = None
+                        ps["data"]["tp3"] = None
+                        ps["step"] = "sig_preview"
+                        _show_signal_preview(token_cbq, cbq_cid, cbq_msg_id, ps["data"])
+
+                    elif cbq_data.startswith("sig_note:"):
+                        sn_cid = cbq_data.split(":",1)[1]
+                        ps = _pending_signal.get(sn_cid)
+                        if not ps:
+                            answer_callback(token_cbq, cbq_id, "⚠️ جلسه منقضی شد")
+                            return
+                        answer_callback(token_cbq, cbq_id)
+                        ps["step"] = "sig_note"
+                        edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                            "📝 یادداشت بنویس (اختیاری):",
+                            [[{"text": "⏭ رد کن", "callback_data": f"sig_back:{sn_cid}"},
+                              {"text": "❌ انصراف", "callback_data": f"sig_cancel:{sn_cid}"}]])
+
+                    elif cbq_data.startswith("sig_recalc:"):
+                        # محاسبه مجدد با RR متفاوت
+                        src_cid = cbq_data.split(":",1)[1]
+                        ps = _pending_signal.get(src_cid)
+                        if not ps:
+                            answer_callback(token_cbq, cbq_id, "⚠️ جلسه منقضی شد")
+                            return
+                        answer_callback(token_cbq, cbq_id)
+                        rr_kb = [[{"text": f"{'✅ ' if ps['data'].get('rr')==v else ''}{v}R",
+                                   "callback_data": f"sig_setrr:{src_cid}:{v}"}
+                                  for v in [1.0, 1.5, 2.0]],
+                                 [{"text": f"{'✅ ' if ps['data'].get('rr')==v else ''}{v}R",
+                                   "callback_data": f"sig_setrr:{src_cid}:{v}"}
+                                  for v in [2.5, 3.0]],
+                                 [{"text": "↩️ بازگشت", "callback_data": f"sig_back:{src_cid}"}]]
+                        edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                            f"🔄 ریوارد رو انتخاب کن (فعلی: <b>{ps['data'].get('rr', SIGNAL_DEFAULT_RR)}R</b>):", rr_kb)
+
+                    elif cbq_data.startswith("sig_setrr:"):
+                        parts_rr = cbq_data.split(":", 2)
+                        rr_cid = parts_rr[1]; rr_val = float(parts_rr[2])
+                        ps = _pending_signal.get(rr_cid)
+                        if not ps:
+                            answer_callback(token_cbq, cbq_id, "⚠️ جلسه منقضی شد")
+                            return
+                        answer_callback(token_cbq, cbq_id, f"✅ ریوارد {rr_val}R")
+                        d_rr = ps["data"]
+                        # محاسبه مجدد
+                        _, tp1_new, _ = _calc_signal(d_rr["symbol"], d_rr["direction"],
+                                                      d_rr["entry"], d_rr["sl"], rr_val)
+                        d_rr["rr"] = rr_val
+                        d_rr["tp1"] = tp1_new
+                        ps["step"] = "sig_preview"
+                        _show_signal_preview(token_cbq, cbq_cid, cbq_msg_id, d_rr)
+
+                    elif cbq_data.startswith("sig_back:"):
+                        sb_cid = cbq_data.split(":",1)[1]
+                        ps = _pending_signal.get(sb_cid)
+                        if not ps:
+                            answer_callback(token_cbq, cbq_id, "⚠️ جلسه منقضی شد")
+                            return
+                        answer_callback(token_cbq, cbq_id)
+                        ps["step"] = "sig_preview"
+                        _show_signal_preview(token_cbq, cbq_cid, cbq_msg_id, ps["data"])
+
+                    elif cbq_data.startswith("sig_send:"):
+                        # ارسال نهایی سیگنال
+                        send_cid = cbq_data.split(":",1)[1]
+                        ps = _pending_signal.get(send_cid)
+                        if not ps:
+                            answer_callback(token_cbq, cbq_id, "⚠️ جلسه منقضی شد")
+                            return
+                        answer_callback(token_cbq, cbq_id, "⏳ در حال ارسال...")
+                        d_send = ps["data"]
+                        # شماره سیگنال خودکار
+                        seq = _sb_next_signal_seq()
+                        sig_id = f"S{seq:05d}"
+                        d_send["id"] = sig_id
+                        d_send["seq"] = seq
+                        d_send["sent_by"] = _get_user_custom_name(send_cid) or send_cid
+                        d_send["sent_at"] = now_teh()
+                        d_send["status"] = "active"
+                        d_send["channel_msg_id"] = None
+                        # ارسال به کانال
+                        sig_text = _build_signal_text(d_send)
+                        channel_mid = None
+                        if SIGNAL_CHANNEL:
+                            try:
+                                r_ch = requests.post(
+                                    f"https://api.telegram.org/bot{token_cbq}/sendMessage",
+                                    json={"chat_id": SIGNAL_CHANNEL, "text": sig_text,
+                                          "parse_mode": "HTML"},
+                                    timeout=10, headers=H)
+                                if r_ch.status_code == 200:
+                                    channel_mid = r_ch.json().get("result",{}).get("message_id")
+                                    d_send["channel_msg_id"] = channel_mid
+                            except Exception as e:
+                                print(f"[signal] channel send error: {e}")
+                        # ذخیره در Supabase
+                        threading.Thread(target=_sb_save_signal, args=(d_send,), daemon=True).start()
+                        del _pending_signal[send_cid]
+                        # تأییدیه به کاربر
+                        ch_note = f"\n📢 ارسال شد به کانال (msg #{channel_mid})" if channel_mid else "\n⚠️ کانال تنظیم نشده — فقط ذخیره شد"
+                        edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                            f"✅ <b>سیگنال {sig_id} ثبت شد!</b>{ch_note}\n\n{sig_text}", [])
 
                     elif cbq_data.startswith("alarm_dir:"):
                         # alarm_dir:cid:buy|sell
@@ -1742,6 +2133,16 @@ def _do_update(upd, token):
                     else:
                         show_main_menu(token, cid, text_msg2, is_adm)
 
+                elif txt == "📡 سیگنال جدید":
+                    # مرحله ۱ — نماد
+                    quick_btns = [[{"text": s, "callback_data": f"sig_sym:{cid}:{s}"} for s in SIGNAL_QUICK_SYMBOLS[:3]],
+                                  [{"text": s, "callback_data": f"sig_sym:{cid}:{s}"} for s in SIGNAL_QUICK_SYMBOLS[3:]],
+                                  [{"text": "❌ انصراف", "callback_data": f"flow_cancel:{cid}"}]]
+                    mid_sig = send_tg_keyboard(token, cid,
+                        "📡 <b>سیگنال جدید</b>\n\nنماد رو انتخاب کن یا بنویس:",
+                        quick_btns)
+                    _pending_signal[cid] = {"step": "sig_symbol", "data": {}, "bot_msg_id": mid_sig}
+
                 elif txt == "⚙️ پنل ادمین" and cid == YOUR_CHAT_ID:
                     admin_kb = [
                         [{"text": "📰 اخبار فارکس",  "callback_data": "admin:news"}],
@@ -1990,6 +2391,84 @@ def _do_update(upd, token):
                         ok3 = sum(1 for tc3 in all_cids3 if send_tg(token, tc3, txt))
                         del _pending_alarm[cid]
                         show_main_menu(token, cid, f"✅ پیام به {ok3} نفر ارسال شد.", is_adm)
+
+                # ── signal pending text steps ─────────────────────────
+                elif cid in _pending_signal and not txt.startswith("/"):
+                    ps = _pending_signal[cid]
+                    ps_step = ps["step"]
+                    ps_data = ps["data"]
+                    ps_mid  = ps.get("bot_msg_id")
+
+                    if txt in ("❌ انصراف",):
+                        del _pending_signal[cid]
+                        if ps_mid:
+                            edit_tg_keyboard(token, cid, ps_mid, "❌ <b>ساخت سیگنال لغو شد.</b>", [])
+
+                    elif ps_step == "sig_symbol":
+                        # کاربر نماد تایپ کرد
+                        sym_s = txt.upper().replace("/","").strip()
+                        if len(sym_s) < 2:
+                            edit_tg_keyboard(token, cid, ps_mid,
+                                "📡 <b>سیگنال جدید</b>\n\n❌ نماد نامعتبر. دوباره بنویس:",
+                                [[{"text": s, "callback_data": f"sig_sym:{cid}:{s}"} for s in SIGNAL_QUICK_SYMBOLS[:3]],
+                                 [{"text": s, "callback_data": f"sig_sym:{cid}:{s}"} for s in SIGNAL_QUICK_SYMBOLS[3:]],
+                                 [{"text": "❌ انصراف", "callback_data": f"sig_cancel:{cid}"}]])
+                        else:
+                            ps_data["symbol"] = sym_s
+                            ps["step"] = "sig_direction"
+                            dir_kb = [[{"text": lbl, "callback_data": f"sig_dir:{cid}:{val}"} for lbl,val in SIGNAL_DIRECTIONS[:2]],
+                                      [{"text": lbl, "callback_data": f"sig_dir:{cid}:{val}"} for lbl,val in SIGNAL_DIRECTIONS[2:]],
+                                      [{"text": "❌ انصراف", "callback_data": f"sig_cancel:{cid}"}]]
+                            edit_tg_keyboard(token, cid, ps_mid,
+                                f"📡 <b>{sym_s}</b>\n\nنوع سفارش:", dir_kb)
+
+                    elif ps_step == "sig_entry_sl":
+                        # کاربر Entry + SL رو نوشته: "73370 72550"
+                        parts_es = txt.strip().split()
+                        if len(parts_es) < 2:
+                            edit_tg_keyboard(token, cid, ps_mid,
+                                f"📡 <b>{ps_data.get('symbol')}</b>  {ps_data.get('dir_lbl','')}\n\n"
+                                "❌ دو عدد بنویس: <code>Entry  SL</code>\nمثال: <code>73370 72550</code>",
+                                [[{"text": "❌ انصراف", "callback_data": f"sig_cancel:{cid}"}]])
+                            return
+                        try:
+                            entry_v = float(parts_es[0].replace(",",""))
+                            sl_raw  = float(parts_es[1].replace(",",""))
+                        except:
+                            edit_tg_keyboard(token, cid, ps_mid,
+                                f"📡 <b>{ps_data.get('symbol')}</b>\n\n❌ عدد نامعتبر. دوباره بنویس:",
+                                [[{"text": "❌ انصراف", "callback_data": f"sig_cancel:{cid}"}]])
+                            return
+                        # تشخیص پیپ vs قیمت — از inline button قبلاً تعیین شده
+                        sl_mode = ps_data.get("sl_mode", "price")
+                        sym_v   = ps_data["symbol"]
+                        direction_v = ps_data["direction"]
+                        if sl_mode == "pip":
+                            sl_v = _sl_from_pips(sym_v, direction_v, entry_v, sl_raw)
+                        else:
+                            sl_v = sl_raw
+                        sl_final, tp1, risk_pips = _calc_signal(sym_v, direction_v, entry_v, sl_v, SIGNAL_DEFAULT_RR)
+                        ps_data.update({"entry": entry_v, "sl": sl_final, "tp1": tp1,
+                                        "tp2": None, "tp3": None, "risk_pips": risk_pips,
+                                        "tf": SIGNAL_DEFAULT_TF, "rr": SIGNAL_DEFAULT_RR})
+                        ps["step"] = "sig_preview"
+                        _show_signal_preview(token, cid, ps_mid, ps_data)
+
+                    elif ps_step == "sig_tp_edit":
+                        # کاربر TP2 یا TP3 تایپ کرد
+                        which = ps_data.get("_editing_tp", "tp2")
+                        try:
+                            val = float(txt.replace(",",""))
+                            ps_data[which] = val
+                        except:
+                            pass
+                        ps["step"] = "sig_preview"
+                        _show_signal_preview(token, cid, ps_mid, ps_data)
+
+                    elif ps_step == "sig_note":
+                        ps_data["note"] = txt.strip()
+                        ps["step"] = "sig_preview"
+                        _show_signal_preview(token, cid, ps_mid, ps_data)
 
                 # ── /sos ─────────────────────────────────────────────
                 elif txt.startswith("/sos") and (cid == YOUR_CHAT_ID or BROADCAST_MODE):
