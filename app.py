@@ -736,28 +736,40 @@ def _delete_msg_after(token, cid, msg_id, delay=120):
 SIGNAL_CHANNEL = os.environ.get("SIGNAL_CHANNEL", "")  # مثلاً @mychannel یا chat_id
 
 def _sb_next_signal_seq():
-    """شماره سیگنال بعدی رو از Supabase بگیر — atomic counter"""
+    """شماره سیگنال بعدی — از آخرین seq در جدول +1"""
     if not SUPABASE_KEY: return int(time.time()) % 100000
     try:
         r = requests.get(
             f"{SUPABASE_URL}/rest/v1/signals?select=seq&order=seq.desc&limit=1",
             headers=_sb_h(), timeout=8)
-        if r.status_code == 200 and r.json():
-            return r.json()[0]["seq"] + 1
-        return 10001
+        if r.status_code == 200:
+            data = r.json()
+            if data and data[0].get("seq") is not None:
+                return int(data[0]["seq"]) + 1
+        return 10001  # جدول خالیه
     except:
-        return int(time.time()) % 100000
+        return 10001
 
 def _sb_save_signal(sig: dict):
-    """ذخیره سیگنال در Supabase"""
+    """ذخیره سیگنال در Supabase — فقط فیلدهای جدول"""
     if not SUPABASE_KEY: return
+    # فقط فیلدهایی که در جدول signals وجود دارن
+    allowed = {"id","seq","symbol","direction","entry","sl","tp1","tp2","tp3",
+               "tf","risk_pips","rr","sent_by","sent_at","channel_msg_id","status","note"}
+    clean = {k: v for k, v in sig.items() if k in allowed}
+    # مقادیر None رو برای tp2/tp3 به null تبدیل کن
+    for f in ("tp2","tp3","channel_msg_id","note"):
+        if f not in clean:
+            clean[f] = None
     try:
         r = requests.post(
             f"{SUPABASE_URL}/rest/v1/signals",
             headers={**_sb_h(), "Prefer": "resolution=merge-duplicates,return=minimal"},
-            json=sig, timeout=10)
+            json=clean, timeout=10)
         if r.status_code not in (200, 201, 204):
-            print(f"[signal] save error: {r.status_code} {r.text[:80]}")
+            print(f"[signal] save error: {r.status_code} {r.text[:200]}")
+        else:
+            print(f"[signal] saved OK: {clean.get('id')}")
     except Exception as e:
         print(f"[signal] save exc: {e}")
 
@@ -1600,6 +1612,167 @@ def _do_update(upd, token):
                                 kb_back.append([{"text": "✕ بستن", "callback_data": "close_myalerts"}])
                                 edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, "\n".join(lines_back), kb_back)
 
+                    elif cbq_data.startswith("admin_sig:"):
+                        # فقط ادمین
+                        if cbq_cid != YOUR_CHAT_ID:
+                            answer_callback(token_cbq, cbq_id, "⛔ فقط ادمین")
+                            return
+                        parts_as2 = cbq_data.split(":", 2)
+                        as2_action = parts_as2[1]
+                        as2_arg    = parts_as2[2] if len(parts_as2) > 2 else ""
+
+                        if as2_action == "list":
+                            answer_callback(token_cbq, cbq_id, "⏳ بارگذاری...")
+                            page = int(as2_arg) if as2_arg.isdigit() else 1
+                            per_page = 5
+                            all_sigs = _sb_load_signals(limit=50)
+                            total = len(all_sigs)
+                            start_i = (page - 1) * per_page
+                            page_sigs = all_sigs[start_i: start_i + per_page]
+                            if not page_sigs:
+                                edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                                    "🗑 <b>مدیریت سیگنال‌ها</b>\n\n📭 سیگنالی وجود ندارد.",
+                                    [[{"text": "↩️ پنل ادمین", "callback_data": "admin_sig:back"}]])
+                                return
+                            lines_asl = [f"🗑 <b>مدیریت سیگنال‌ها</b>  ({total} سیگنال)\n"]
+                            kb_asl = []
+                            for s in page_sigs:
+                                sid2   = s.get("id","")
+                                sym2   = s.get("symbol","")
+                                dir2   = s.get("direction","")
+                                entry2 = s.get("entry")
+                                tf2    = s.get("tf","")
+                                by2    = s.get("sent_by","")
+                                at2    = (s.get("sent_at") or "")[:16]
+                                ch2    = s.get("channel_msg_id")
+                                origin2 = "📤" if ch2 else "💾"
+                                dir_short2 = {"buy_limit":"BL↗","buy_stop":"BS↗",
+                                              "sell_limit":"SL↘","sell_stop":"SS↘"}.get(dir2, dir2)
+                                lines_asl.append(
+                                    f"{origin2} <b>{sid2}</b>  #{sym2}  {dir_short2}\n"
+                                    f"   ➡️ <code>{_fmt_signal_price(entry2, sym2)}</code>  "
+                                    f"⏱{tf2}  👤{by2}  🕐{at2}"
+                                )
+                                kb_asl.append([{"text": f"🗑 حذف {sid2} — {sym2} {dir_short2}",
+                                                "callback_data": f"admin_sig:confirm:{sid2}:{page}"}])
+                            # pagination
+                            nav_row = []
+                            if page > 1:
+                                nav_row.append({"text": "◀️ قبل", "callback_data": f"admin_sig:list:{page-1}"})
+                            if start_i + per_page < total:
+                                nav_row.append({"text": "بعد ▶️", "callback_data": f"admin_sig:list:{page+1}"})
+                            if nav_row:
+                                kb_asl.append(nav_row)
+                            kb_asl.append([{"text": "↩️ پنل ادمین", "callback_data": "admin_sig:back"}])
+                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                                "\n".join(lines_asl), kb_asl)
+
+                        elif as2_action == "confirm":
+                            # as2_arg = "S10001:page"
+                            conf_parts = as2_arg.split(":", 1)
+                            conf_sid   = conf_parts[0]
+                            conf_page  = conf_parts[1] if len(conf_parts) > 1 else "1"
+                            answer_callback(token_cbq, cbq_id)
+                            # اطلاعات سیگنال برای نمایش در تأیید
+                            all_sigs_c = _sb_load_signals(limit=50)
+                            sig_c = next((s for s in all_sigs_c if s.get("id") == conf_sid), None)
+                            if not sig_c:
+                                edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                                    "⚠️ سیگنال پیدا نشد.",
+                                    [[{"text": "↩️ برگشت به لیست", "callback_data": f"admin_sig:list:{conf_page}"}]])
+                                return
+                            sym_c   = sig_c.get("symbol","")
+                            dir_c   = sig_c.get("direction","")
+                            entry_c = sig_c.get("entry")
+                            by_c    = sig_c.get("sent_by","")
+                            at_c    = (sig_c.get("sent_at") or "")[:16]
+                            ch_c    = sig_c.get("channel_msg_id")
+                            ch_warn = "\n\n⚠️ این سیگنال <b>به گروه ارسال شده</b> — حذف از DB فقط رکورد رو پاک میکنه، پیام کانال دست‌نخورده میمونه." if ch_c else ""
+                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                                f"⚠️ <b>تأیید حذف سیگنال</b>\n\n"
+                                f"🆔 <b>{conf_sid}</b>  #{sym_c}  {dir_c}\n"
+                                f"➡️ Entry: <code>{_fmt_signal_price(entry_c, sym_c)}</code>\n"
+                                f"👤 {by_c}  🕐 {at_c}"
+                                f"{ch_warn}\n\n"
+                                f"مطمئنی؟",
+                                [[{"text": "✅ بله، حذف کن",    "callback_data": f"admin_sig:delete:{conf_sid}:{conf_page}"}],
+                                 [{"text": "❌ نه، برگشت",       "callback_data": f"admin_sig:list:{conf_page}"}]])
+
+                        elif as2_action == "delete":
+                            del_parts  = as2_arg.split(":", 1)
+                            del_sid    = del_parts[0]
+                            del_page   = del_parts[1] if len(del_parts) > 1 else "1"
+                            answer_callback(token_cbq, cbq_id, "🗑 در حال حذف...")
+                            # حذف از Supabase
+                            try:
+                                r_del = requests.delete(
+                                    f"{SUPABASE_URL}/rest/v1/signals?id=eq.{del_sid}",
+                                    headers={**_sb_h(), "Prefer": "return=minimal"},
+                                    timeout=10)
+                                ok_del = r_del.status_code in (200, 204)
+                            except Exception as e:
+                                print(f"[admin_sig] delete error: {e}")
+                                ok_del = False
+                            if not ok_del:
+                                edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                                    f"❌ خطا در حذف سیگنال <b>{del_sid}</b>.",
+                                    [[{"text": "↩️ برگشت", "callback_data": f"admin_sig:list:{del_page}"}]])
+                                return
+                            # بعد از حذف، لیست آپدیت‌شده رو نشون بده
+                            page_back = int(del_page) if del_page.isdigit() else 1
+                            per_page2 = 5
+                            all_sigs2 = _sb_load_signals(limit=50)
+                            total2    = len(all_sigs2)
+                            # اگه صفحه الان خالی شد، یه صفحه برگرد
+                            start_i2 = (page_back - 1) * per_page2
+                            if start_i2 >= total2 and page_back > 1:
+                                page_back -= 1
+                                start_i2 = (page_back - 1) * per_page2
+                            page_sigs2 = all_sigs2[start_i2: start_i2 + per_page2]
+                            if not page_sigs2:
+                                edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                                    f"✅ سیگنال <b>{del_sid}</b> حذف شد.\n\n📭 سیگنال دیگری وجود ندارد.",
+                                    [[{"text": "↩️ پنل ادمین", "callback_data": "admin_sig:back"}]])
+                                return
+                            lines_af = [f"✅ <b>{del_sid}</b> حذف شد.\n\n🗑 <b>مدیریت سیگنال‌ها</b>  ({total2} سیگنال)\n"]
+                            kb_af = []
+                            for s in page_sigs2:
+                                sid_f   = s.get("id",""); sym_f2  = s.get("symbol","")
+                                dir_f   = s.get("direction",""); entry_f = s.get("entry")
+                                tf_f    = s.get("tf",""); by_f    = s.get("sent_by","")
+                                at_f    = (s.get("sent_at") or "")[:16]
+                                ch_f    = s.get("channel_msg_id")
+                                orig_f  = "📤" if ch_f else "💾"
+                                ds_f    = {"buy_limit":"BL↗","buy_stop":"BS↗",
+                                           "sell_limit":"SL↘","sell_stop":"SS↘"}.get(dir_f, dir_f)
+                                lines_af.append(
+                                    f"{orig_f} <b>{sid_f}</b>  #{sym_f2}  {ds_f}\n"
+                                    f"   ➡️ <code>{_fmt_signal_price(entry_f, sym_f2)}</code>  "
+                                    f"⏱{tf_f}  👤{by_f}  🕐{at_f}"
+                                )
+                                kb_af.append([{"text": f"🗑 حذف {sid_f} — {sym_f2} {ds_f}",
+                                               "callback_data": f"admin_sig:confirm:{sid_f}:{page_back}"}])
+                            nav_f = []
+                            if page_back > 1:
+                                nav_f.append({"text": "◀️ قبل", "callback_data": f"admin_sig:list:{page_back-1}"})
+                            if start_i2 + per_page2 < total2:
+                                nav_f.append({"text": "بعد ▶️", "callback_data": f"admin_sig:list:{page_back+1}"})
+                            if nav_f: kb_af.append(nav_f)
+                            kb_af.append([{"text": "↩️ پنل ادمین", "callback_data": "admin_sig:back"}])
+                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, "\n".join(lines_af), kb_af)
+
+                        elif as2_action == "back":
+                            answer_callback(token_cbq, cbq_id)
+                            admin_kb_b = [
+                                [{"text": "📰 اخبار فارکس",      "callback_data": "admin:news"}],
+                                [{"text": "✉️ پیام به گروه",     "callback_data": "admin:broadcast"}],
+                                [{"text": "👥 لیست کاربران",      "callback_data": "admin:users"}],
+                                [{"text": "🗑 مدیریت سیگنال‌ها", "callback_data": "admin_sig:list:1"}],
+                                [{"text": "✕ بستن",               "callback_data": "close_myalerts"}],
+                            ]
+                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                                "⚙️ <b>پنل ادمین</b>\n\nیه گزینه انتخاب کن:", admin_kb_b)
+
                     elif cbq_data.startswith("clean_chat:"):
                         answer_callback(token_cbq, cbq_id, "🧹 در حال پاک‌سازی...")
                         target_cid = cbq_data.split(":", 1)[1]
@@ -2214,10 +2387,11 @@ def _do_update(upd, token):
 
                 elif txt == "⚙️ پنل ادمین" and cid == YOUR_CHAT_ID:
                     admin_kb = [
-                        [{"text": "📰 اخبار فارکس",  "callback_data": "admin:news"}],
-                        [{"text": "✉️ پیام به گروه", "callback_data": "admin:broadcast"}],
-                        [{"text": "👥 لیست کاربران",  "callback_data": "admin:users"}],
-                        [{"text": "✕ بستن",           "callback_data": "close_myalerts"}],
+                        [{"text": "📰 اخبار فارکس",       "callback_data": "admin:news"}],
+                        [{"text": "✉️ پیام به گروه",      "callback_data": "admin:broadcast"}],
+                        [{"text": "👥 لیست کاربران",       "callback_data": "admin:users"}],
+                        [{"text": "🗑 مدیریت سیگنال‌ها",  "callback_data": "admin_sig:list:1"}],
+                        [{"text": "✕ بستن",                "callback_data": "close_myalerts"}],
                     ]
                     send_tg_keyboard(token, cid,
                         "⚙️ <b>پنل ادمین</b>\n\nیه گزینه انتخاب کن:", admin_kb)
