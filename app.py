@@ -1012,7 +1012,7 @@ def _build_myalerts_section(alerts_list, title, start_idx=1):
             f"└──────────────"
         )
         lines.append(block)
-        kb.append([{"text": f"🗑 حذف  {sym2} {cond2} @ {fmt_price(tgt2, sym2)}", "callback_data": f"del_confirm:{a['id']}"}])
+        kb.append([{"text": f"🗑 {i}. {sym2} {cond2} @ {fmt_price(tgt2, sym2)}", "callback_data": f"del_confirm:{a['id']}"}])
     kb.append([{"text": "✕ بستن", "callback_data": "close_myalerts"}])
     return "\n".join(lines), kb
 
@@ -1093,13 +1093,11 @@ def _do_update(upd, token):
                         elif priv_can and not pub_can:
                             txt_can, kb_can = _build_myalerts_section(priv_can, f"🔒 <b>آلارم‌های شخصی</b>  ({len(priv_can)} مورد)")
                         elif combined_can:
-                            txt_can = f"📋 <b>همه آلارم‌های من</b>  ({len(combined_can)} مورد)"
-                            kb_can = []
-                            for a in combined_can:
-                                sym2 = a.get("symbol",""); tgt2 = a.get("target_price",0)
-                                cond2 = "📈 BUY" if a.get("condition") == "below" else "📉 SELL"
-                                kb_can.append([{"text":f"🗑 حذف  {sym2} {cond2} @ {fmt_price(tgt2,sym2)}","callback_data":f"del_confirm:{a['id']}"}])
-                            kb_can.append([{"text":"✕ بستن","callback_data":"close_myalerts"}])
+                            txt_can, kb_can = _build_myalerts_section(pub_can, f"📋 <b>همه آلارم‌های من</b>  ({len(combined_can)} مورد)", start_idx=1)
+                            priv_txt_can, priv_kb_can = _build_myalerts_section(priv_can, "\n🔒 <b>شخصی</b>", start_idx=len(pub_can)+1)
+                            if priv_txt_can:
+                                txt_can = txt_can + "\n" + priv_txt_can
+                                kb_can = kb_can[:-1] + priv_kb_can
                         else:
                             txt_can, kb_can = "📭 هیچ آلارم فعالی نداری.", [[{"text":"✕ بستن","callback_data":"close_myalerts"}]]
                         edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, txt_can, kb_can)
@@ -1115,17 +1113,9 @@ def _do_update(upd, token):
                             _cache_alerts = d
                             answer_callback(token_cbq, cbq_id, "✅ آلارم حذف شد")
                             threading.Thread(target=_sb_delete_alert, args=(aid,), daemon=True).start()
-                            # اول پیام ادیت بشه به «حذف شد»
-                            if a_del:
-                                sym_d = a_del.get("symbol","")
-                                tgt_d = a_del.get("target_price", 0)
-                                cond_d = "📈 BUY" if a_del.get("condition") == "below" else "📉 SELL"
-                                edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
-                                    f"🗑 <b>{sym_d}</b>  {cond_d}  @  <code>{fmt_price(tgt_d, sym_d)}</code>\nآلارم حذف شد ✔️", [])
-                            import time as _t; _t.sleep(0.8)
                         else:
                             answer_callback(token_cbq, cbq_id, "⚠️ آلارم پیدا نشد")
-                        # بعد از مکث کوتاه، لیست به‌روز بفرست
+                        # بازسازی لیست در همان پیام — بدون sleep، بدون پیام جدید
                         d2 = load_alerts()
                         all_a2 = d2.get("alerts", [])
                         custom_name2 = _get_user_custom_name(cbq_cid)
@@ -1135,7 +1125,7 @@ def _do_update(upd, token):
                         )]
                         combined2 = pub2 + priv2
                         if not combined2:
-                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, "📭 همه آلارم‌ها حذف شدن.", [])
+                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, "📭 هیچ آلارم فعالی نداری.", [])
                         elif pub2 and not priv2:
                             txt2, kb2 = _build_myalerts_section(pub2, f"🌐 <b>آلارم‌های تیمی</b>  ({len(pub2)} مورد)")
                             edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, txt2, kb2)
@@ -1143,13 +1133,13 @@ def _do_update(upd, token):
                             txt2, kb2 = _build_myalerts_section(priv2, f"🔒 <b>آلارم‌های شخصی</b>  ({len(priv2)} مورد)")
                             edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, txt2, kb2)
                         else:
-                            txt2 = f"📋 <b>همه آلارم‌های من</b>  ({len(combined2)} مورد)"
-                            kb2 = []
-                            for a in combined2:
-                                sym2 = a.get("symbol",""); tgt2 = a.get("target_price",0)
-                                cond2 = "📈 BUY" if a.get("condition") == "below" else "📉 SELL"
-                                kb2.append([{"text":f"🗑 حذف  {sym2} {cond2} @ {fmt_price(tgt2,sym2)}","callback_data":f"del_confirm:{a['id']}"}])
-                            kb2.append([{"text":"✕ بستن","callback_data":"close_myalerts"}])
+                            txt2, kb2 = _build_myalerts_section(pub2, f"📋 <b>همه آلارم‌های من</b>  ({len(combined2)} مورد)", start_idx=1)
+                            # اضافه کردن آلارم‌های شخصی به لیست ترکیبی
+                            txt2_lines = txt2.split("\n")
+                            priv_txt, priv_kb = _build_myalerts_section(priv2, f"\n🔒 <b>شخصی</b>", start_idx=len(pub2)+1)
+                            if priv_txt:
+                                txt2 = txt2 + "\n" + priv_txt
+                                kb2 = kb2[:-1] + priv_kb  # بستن رو از pub حذف کن، priv_kb خودش داره
                             edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, txt2, kb2)
 
                     elif cbq_data.startswith("set_reminder:"):
@@ -1251,44 +1241,19 @@ def _do_update(upd, token):
                             combined_mya = pub_mya + priv_mya
                             if not combined_mya:
                                 edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, "📭 هیچ آلارم فعالی نداری.", [[{"text":"✕ بستن","callback_data":"close_myalerts"}]])
+                            elif pub_mya and not priv_mya:
+                                txt_mya_all, kb_mya_all = _build_myalerts_section(pub_mya, f"🌐 <b>آلارم‌های تیمی</b>  ({len(pub_mya)} مورد)")
+                                edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, txt_mya_all, kb_mya_all)
+                            elif priv_mya and not pub_mya:
+                                txt_mya_all, kb_mya_all = _build_myalerts_section(priv_mya, f"🔒 <b>آلارم‌های شخصی</b>  ({len(priv_mya)} مورد)")
+                                edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, txt_mya_all, kb_mya_all)
                             else:
-                                lines_all = [f"📋 <b>همه آلارم‌های من</b>  ({len(combined_mya)} مورد)"]
-                                kb_all = []
-                                if pub_mya:
-                                    lines_all.append("\n🌐 <b>تیمی</b>")
-                                    for i, a in enumerate(pub_mya, 1):
-                                        sym2 = a.get("symbol",""); tgt2 = a.get("target_price",0)
-                                        cond2 = "📈 BUY" if a.get("condition") == "below" else "📉 SELL"
-                                        cur2 = a.get("last_price")
-                                        cur_txt = f"<code>{fmt_price(cur2,sym2)}</code>" if cur2 else "—"
-                                        cmt2 = f"\n│  💬 {a['comment']}" if a.get("comment") else ""
-                                        lines_all.append(
-                                            f"┌─ {i}. <b>{sym2}</b>  {cond2}\n"
-                                            f"│  🎯 هدف: <code>{fmt_price(tgt2,sym2)}</code>\n"
-                                            f"│  💹 فعلی: {cur_txt}"
-                                            f"{cmt2}\n"
-                                            f"└──────────────"
-                                        )
-                                        kb_all.append([{"text":f"🗑 حذف  {sym2} {cond2} @ {fmt_price(tgt2,sym2)}","callback_data":f"del_confirm:{a['id']}"}])
-                                if priv_mya:
-                                    lines_all.append("\n🔒 <b>شخصی</b>")
-                                    start2 = len(pub_mya)+1
-                                    for i, a in enumerate(priv_mya, start2):
-                                        sym2 = a.get("symbol",""); tgt2 = a.get("target_price",0)
-                                        cond2 = "📈 BUY" if a.get("condition") == "below" else "📉 SELL"
-                                        cur2 = a.get("last_price")
-                                        cur_txt = f"<code>{fmt_price(cur2,sym2)}</code>" if cur2 else "—"
-                                        cmt2 = f"\n│  💬 {a['comment']}" if a.get("comment") else ""
-                                        lines_all.append(
-                                            f"┌─ {i}. <b>{sym2}</b>  {cond2}\n"
-                                            f"│  🎯 هدف: <code>{fmt_price(tgt2,sym2)}</code>\n"
-                                            f"│  💹 فعلی: {cur_txt}"
-                                            f"{cmt2}\n"
-                                            f"└──────────────"
-                                        )
-                                        kb_all.append([{"text":f"🗑 حذف  {sym2} {cond2} @ {fmt_price(tgt2,sym2)}","callback_data":f"del_confirm:{a['id']}"}])
-                                kb_all.append([{"text":"✕ بستن","callback_data":"close_myalerts"}])
-                                edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, "\n".join(lines_all), kb_all)
+                                txt_mya_all, kb_mya_all = _build_myalerts_section(pub_mya, f"📋 <b>همه آلارم‌های من</b>  ({len(combined_mya)} مورد)\n\n🌐 <b>تیمی</b>", start_idx=1)
+                                priv_txt_all, priv_kb_all = _build_myalerts_section(priv_mya, "\n🔒 <b>شخصی</b>", start_idx=len(pub_mya)+1)
+                                if priv_txt_all:
+                                    txt_mya_all = txt_mya_all + "\n" + priv_txt_all
+                                    kb_mya_all = kb_mya_all[:-1] + priv_kb_all
+                                edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, txt_mya_all, kb_mya_all)
 
                     elif cbq_data == "admin:news" and cbq_cid == YOUR_CHAT_ID:
                         answer_callback(token_cbq, cbq_id, "در حال دریافت اخبار...")
@@ -1473,17 +1438,28 @@ def _do_update(upd, token):
                     elif cbq_data.startswith("clean_chat:"):
                         answer_callback(token_cbq, cbq_id, "🧹 در حال پاک‌سازی...")
                         target_cid = cbq_data.split(":", 1)[1]
-                        # پیام خود status رو هم به لیست اضافه کن
                         if cbq_msg_id:
                             _track_msg(cbq_cid, cbq_msg_id)
                         def _do_clean(tok=token_cbq, c=cbq_cid, tc=target_cid):
                             cnt = delete_chat_history(tok, tc)
                             send_tg_keyboard(tok, c,
-                                f"✅ <b>{cnt} پیام پاک شد.</b>\n"
-                                f"آلارم‌های ارسال‌شده دست‌نخورده موندن. 🚨",
-                                [[{"text": "🧹 پاک‌سازی مجدد", "callback_data": f"clean_chat:{tc}"},
-                                  {"text": "✕ بستن", "callback_data": "close_myalerts"}]])
+                                f"✅ <b>{cnt} پیام پاک شد.</b>",
+                                [[{"text": "✕ بستن", "callback_data": "close_myalerts"}]])
                         threading.Thread(target=_do_clean, daemon=True).start()
+
+                    elif cbq_data.startswith("edit_name:"):
+                        # شروع flow ویرایش اسم از طریق استاتوس
+                        en_cid = cbq_data.split(":", 1)[1]
+                        answer_callback(token_cbq, cbq_id)
+                        d_en = load_alerts()
+                        cur_name_en = next(
+                            (u.get("custom_name","") for u in d_en.get("users",[]) if str(u.get("chat_id","")) == en_cid),
+                            "")
+                        cur_info_en = f"\nاسم فعلی: <b>{cur_name_en}</b>" if cur_name_en else ""
+                        edit_tg_keyboard(token_cbq, en_cid, cbq_msg_id,
+                            f"✏️ <b>ویرایش اسم</b>{cur_info_en}\n\nاسم جدیدت رو بنویس:",
+                            [[{"text": "❌ انصراف", "callback_data": f"flow_cancel:{en_cid}"}]])
+                        _pending_alarm[en_cid] = {"step": "edit_name_input", "data": {}, "bot_msg_id": cbq_msg_id}
 
                     elif cbq_data == "close_myalerts":
                         answer_callback(token_cbq, cbq_id, "بسته شد")
@@ -1741,15 +1717,11 @@ def _do_update(upd, token):
                         f"🔒 آلارم شخصی: {'✅ فعال' if has_priv else '❌ غیرفعال'}\n"
                         f"⏱ {now_pretty()} (تهران)"
                     )
+                    status_kb = []
                     if not has_priv:
-                        req_kb = [
-                            [{"text": "📩 درخواست فعال‌سازی آلارم شخصی", "callback_data": f"req_private:{cid}"}],
-                            [{"text": "🧹 پاک کردن چت (غیر از آلارم‌ها)", "callback_data": f"clean_chat:{cid}"}],
-                        ]
-                        send_tg_keyboard(token, cid, status_text, req_kb)
-                    else:
-                        clean_kb = [[{"text": "🧹 پاک کردن چت (غیر از آلارم‌ها)", "callback_data": f"clean_chat:{cid}"}]]
-                        send_tg_keyboard(token, cid, status_text, clean_kb)
+                        status_kb.append([{"text": "📩 درخواست فعال‌سازی آلارم شخصی", "callback_data": f"req_private:{cid}"}])
+                    status_kb.append([{"text": "✏️ ویرایش اسم", "callback_data": f"edit_name:{cid}"}])
+                    send_tg_keyboard(token, cid, status_text, status_kb)
 
                 elif txt == "⭐ آلارم‌های من":
                     is_adm = (cid == YOUR_CHAT_ID)
@@ -1922,7 +1894,31 @@ def _do_update(upd, token):
                             except: pass
                         threading.Thread(target=_bgw, daemon=True).start()
 
-                    elif step == "sos_symbol":
+                    elif step == "edit_name_input":
+                        new_name = txt.strip()
+                        if len(new_name) < 2:
+                            if bot_msg_id:
+                                edit_tg_keyboard(token, cid, bot_msg_id,
+                                    "✏️ <b>ویرایش اسم</b>\n\n❌ اسم باید حداقل ۲ حرف باشه.\nدوباره بنویس:",
+                                    [[{"text": "❌ انصراف", "callback_data": f"flow_cancel:{cid}"}]])
+                        else:
+                            d_en2 = load_alerts()
+                            found_en = False
+                            for u in d_en2.get("users", []):
+                                if str(u.get("chat_id","")) == cid:
+                                    u["custom_name"] = new_name
+                                    found_en = True
+                                    break
+                            if not found_en:
+                                d_en2.setdefault("users",[]).append({
+                                    "chat_id": cid, "username": uname,
+                                    "joined_at": now_teh(), "custom_name": new_name
+                                })
+                            save_alerts(d_en2)
+                            del _pending_alarm[cid]
+                            if bot_msg_id:
+                                edit_tg_keyboard(token, cid, bot_msg_id,
+                                    f"✅ <b>اسم با موفقیت ذخیره شد!</b>\n\nاسم جدید: <b>{new_name}</b>", [])
                         sym_w2 = txt.upper().replace("/","")
                         if len(sym_w2) < 2:
                             if bot_msg_id:
