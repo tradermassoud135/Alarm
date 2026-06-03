@@ -842,7 +842,11 @@ async function loadAlerts() {
 
     const active = alerts.filter(a => a.active && !a.is_private);
     const myPrivateActive = allPrivateData.filter(a => a.active);
-    document.getElementById('sc-alerts').textContent = active.length;
+    const totalActive = active.length + myPrivateActive.length;
+    document.getElementById('sc-alerts').textContent = totalActive;
+    document.getElementById('sc-alerts-sub').textContent = totalActive
+      ? `${active.length} تیمی · ${myPrivateActive.length} شخصی`
+      : '—';
     const updDot = document.getElementById('upd-dot'), updTxt = document.getElementById('upd-txt'), updTime = document.getElementById('upd-time');
     if (!_forexOpen) { updDot.className = 'upd-dot err'; updTxt.textContent = '⚠️ بازار فارکس تعطیل است (شنبه/یکشنبه) — کریپتو فعال'; }
     else if (ds.last_update) { updDot.className = 'upd-dot'; updTxt.textContent = 'آخرین بررسی سرور'; updTime.textContent = minutesAgo(ds.last_update); }
@@ -851,8 +855,6 @@ async function loadAlerts() {
     if (errs.length) { errLog.classList.add('show'); errItems.innerHTML = errs.slice(-3).reverse().map(e => `<div class="err-item">${e.time} — ${e.msg}</div>`).join(''); }
     else { errLog.classList.remove('show'); }
     filterAlerts();
-    document.getElementById('sc-alerts-sub').textContent = active.length ? `${active.filter(a=>a.last_price).length} با قیمت` : '—';
-  } catch(e) { console.error('loadAlerts:', e); }
 }
 
 // ========== Initialization ==========
