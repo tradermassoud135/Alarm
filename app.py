@@ -256,8 +256,11 @@ def save_alerts(data):
         threading.Thread(target=_bg, daemon=True).start()
 
 def save_alert_fired(a):
-    """وقتی آلارم fire میشه — فقط همون ردیف رو آپدیت کن"""
+    """وقتی آلارم fire میشه — ردیف رو آپدیت کن و cache رو پاک کن تا archive درست لود بشه"""
+    global _cache_alerts
     _sb_upsert_alert(a)
+    # cache رو پاک کن تا دفعه بعد از Supabase بخونه و archive آپدیت بشه
+    _cache_alerts = None
 
 # =====================================================================
 # Supabase
@@ -2335,7 +2338,9 @@ def _do_update(upd, token):
                 # ── منو Reply Keyboard ──────────────────────────────
                 elif txt in ("📊 وضعیت",) or (txt.startswith("/status") and txt not in ("/statuspage",)):
                     d2 = load_alerts()
-                    active2 = [a for a in d2.get("alerts",[]) if a.get("active") and not a.get("is_private")]
+                    all_active2 = [a for a in d2.get("alerts",[]) if a.get("active")]
+                    team_active2 = [a for a in all_active2 if not a.get("is_private")]
+                    private_active2 = [a for a in all_active2 if a.get("is_private")]
                     my_rem = _reminders.get(cid, {})
                     is_open = is_forex_market_open()
                     is_adm = (cid == YOUR_CHAT_ID)
@@ -2343,7 +2348,8 @@ def _do_update(upd, token):
                     status_text = (
                         f"📊 <b>وضعیت سیستم</b>\n\n"
                         f"{'🟢' if is_open else '🔴'} فارکس: {'باز' if is_open else 'بسته'}\n"
-                        f"📈 آلارم فعال: <b>{len(active2)}</b>\n"
+                        f"📈 آلارم فعال (کل): <b>{len(all_active2)}</b>\n"
+                        f"🌐 تیمی: <b>{len(team_active2)}</b> | 🔒 شخصی: <b>{len(private_active2)}</b>\n"
                         f"⏰ هشدار دوره‌ای من: <b>{len(my_rem)}</b>\n"
                         f"🔒 آلارم شخصی: {'✅ فعال' if has_priv else '❌ غیرفعال'}\n"
                         f"⏱ {now_pretty()} (تهران)"
@@ -3460,6 +3466,9 @@ def del_alert(aid):
 
 @app.route("/api/archive", methods=["GET"])
 def get_archive():
+    global _cache_alerts
+    # cache رو پاک کن تا آرشیو همیشه تازه از Supabase بخونه
+    _cache_alerts = None
     return jsonify(load_alerts().get("archive", []))
 
 @app.route("/api/archive", methods=["DELETE"])
@@ -3576,10 +3585,16 @@ def test_tg():
 def status():
     alerts = load_alerts()
     journal = load_journal()
+    all_active = [a for a in alerts.get("alerts", []) if a.get("active")]
+    team_active = [a for a in all_active if not a.get("is_private")]
+    private_active = [a for a in all_active if a.get("is_private")]
     return jsonify({
         "status": "ok", "last_update": alerts.get("last_update"),
         "errors": alerts.get("errors", [])[-5:], "time_tehran": now_teh(),
-        "alert_count": len(alerts.get("alerts",[])), "forex_open": is_forex_market_open(),
+        "alert_count": len(all_active),          # کل (تیمی + شخصی)
+        "team_alert_count": len(team_active),     # فقط تیمی
+        "private_alert_count": len(private_active), # فقط شخصی
+        "forex_open": is_forex_market_open(),
         "loop_count": _loop_count, "journal_count": len(journal)
     })
 
