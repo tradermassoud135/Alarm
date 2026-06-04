@@ -661,54 +661,40 @@ def answer_callback(token, callback_id, text=""):
     except: pass
 
 # ── reminder state ─────────────────────────────────────────────
-# memory: { cid: { sym: {"interval": int, "active": bool} } }
+# memory: { cid: { sym: {"interval": int, "active": bool, "tf_sec": int} } }
 # Supabase: جدول reminders — هر ردیف یه reminder فعال
 _reminders = {}
 
-# ── candle-close helpers (تهران) ──────────────────────────────────────────────
-# offset قبل از کلوز به ثانیه برای هر تایم‌فریم
-_TF_OFFSET = {
-    300:   60,    # M5  → ۱ دقیقه قبل
-    900:  300,    # M15 → ۵ دقیقه قبل
-    3600: 900,    # H1  → ۱۵ دقیقه قبل
-    14400: 900,   # H4  → ۱۵ دقیقه قبل
-}
-_TF_LABEL = {300:"M5", 900:"M15", 1800:"M30", 3600:"H1", 14400:"H4", 86400:"D1"}
-
+# ── candle-close helpers ──────────────────────────────────────
+_TF_OFFSET = {300: 60, 900: 300, 3600: 900, 14400: 900}  # ثانیه قبل از کلوز
+_TF_LABEL  = {300:"M5", 900:"M15", 3600:"H1", 14400:"H4"}
+REMINDER_QUICK_SYMBOLS = ["XAUUSD", "EURUSD", "GBPUSD", "BTCUSDT", "ETHUSDT", "USDJPY"]
 
 def _candle_info(tf_sec):
     """
-    اطلاعات کندل فعلی بر اساس تایم تهران.
-    برمی‌گردونه: (ثانیه_تا_هشدار, تایم_کلوز_تهران_str, پیشرفت_درصد)
-
-    منطق:
+    برمی‌گردونه: (wait_sec, close_teh_str, progress_pct)
     - اگه هنوز وقت هشدار این کندل نرسیده → صبر کن
-    - اگه توی پنجره هشدار هستیم (بین alert و close) → فوری هشدار بده (۵ ثانیه)
-    - اگه کندل بسته → برو سراغ کندل بعدی
+    - اگه توی پنجره هشدار هستیم (بین alert_time و close) → فوری (۵ ثانیه)
+    - اگه کندل بسته → کندل بعدی
     """
     offset = _TF_OFFSET.get(tf_sec, 300)
     now_utc = time.time()
-    current_close_epoch = (int(now_utc) // tf_sec + 1) * tf_sec
-    alert_epoch = current_close_epoch - offset
-    wait = alert_epoch - now_utc
+    cur_close = (int(now_utc) // tf_sec + 1) * tf_sec
+    alert_t   = cur_close - offset
+    wait      = alert_t - now_utc
     if wait <= 0:
-        if now_utc < current_close_epoch:
-            # توی پنجره هشدار هستیم → فوری هشدار بده
-            wait = 5
-            close_epoch_use = current_close_epoch
+        if now_utc < cur_close:
+            wait, use_close = 5, cur_close          # توی پنجره → فوری
         else:
-            # کندل کاملاً بسته → کندل بعدی
-            close_epoch_use = current_close_epoch + tf_sec
-            wait = (close_epoch_use - offset) - now_utc
+            use_close = cur_close + tf_sec          # کندل بسته → بعدی
+            wait = (use_close - offset) - now_utc
     else:
-        close_epoch_use = current_close_epoch
+        use_close = cur_close
     from datetime import datetime as _dt
-    close_teh = _dt.fromtimestamp(close_epoch_use, tz=TEHRAN).strftime("%H:%M")
-    candle_start = close_epoch_use - tf_sec
-    elapsed = now_utc - candle_start
-    progress = min(99, int(elapsed / tf_sec * 100))
+    close_teh = _dt.fromtimestamp(use_close, tz=TEHRAN).strftime("%H:%M")
+    elapsed   = now_utc - (use_close - tf_sec)
+    progress  = min(99, int(elapsed / tf_sec * 100))
     return max(int(wait), 5), close_teh, progress
-
 
 # ── Supabase reminder helpers ────────────────────────────────
 def _sb_save_reminder(cid, sym, interval_sec, tf_sec=0):
@@ -953,22 +939,20 @@ def _show_signal_preview(token, cid, mid, data):
     edit_tg_keyboard(token, cid, mid, preview, kb)
 
 def _send_reminder(token, cid, sym, tf_sec=0):
-    """پیام هشدار کلوز کندل بفرست"""
+    """پیام هشدار کلوز کندل — حذف ۵ دقیقه بعد از ارسال"""
     tf_label = _TF_LABEL.get(tf_sec, "")
     if tf_sec and tf_label:
         _, close_teh, progress = _candle_info(tf_sec)
         offset_min = _TF_OFFSET.get(tf_sec, 300) // 60
         msg = (f"🕯 <b>کلوز کندل {tf_label} — {sym}</b>\n"
-               f"━━━━━━━━━━━━━━━\n"
-               f"⏰ کلوز در تهران: <b>{close_teh}</b>\n"
-               f"⏳ مانده تا کلوز: <b>{offset_min} دقیقه</b>\n"
+               f"━━━━━━━━━━━━━━━━━━\n"
+               f"⏰ کلوز تهران: <b>{close_teh}</b>\n"
+               f"⏳ مانده تا کلوز: <b>~{offset_min} دقیقه</b>\n"
                f"📊 پیشرفت کندل: <b>{progress}%</b>\n"
-               f"━━━━━━━━━━━━━━━\n"
-               f"🕐 این پیام {offset_min} دقیقه دیگه پاک میشه.")
-        delay = _TF_OFFSET.get(tf_sec, 300)
+               f"━━━━━━━━━━━━━━━━━━\n"
+               f"🗑 این پیام ۵ دقیقه دیگه حذف میشه.")
     else:
-        msg = f"⚠️ <b>یادآوری:</b> <code>{sym}</code> بررسی بشه!\n\n🕐 این پیام ۲ دقیقه دیگه پاک میشه."
-        delay = 120
+        msg = f"⚠️ <b>یادآوری:</b> <code>{sym}</code> بررسی بشه!\n\n🗑 این پیام ۵ دقیقه دیگه حذف میشه."
     kb = [[{"text": f"✕ کنسل {sym}", "callback_data": f"cancel_reminder_one:{cid}:{sym}"}]]
     try:
         r = requests.post(
@@ -978,32 +962,33 @@ def _send_reminder(token, cid, sym, tf_sec=0):
             timeout=10, headers=H)
         mid = r.json().get("result", {}).get("message_id")
         if mid:
-            _delete_msg_after(token, cid, mid, delay=delay)
+            _delete_msg_after(token, cid, mid, delay=300)  # ۵ دقیقه
     except: pass
 
 def _schedule_reminder(token, cid, sym, interval_sec, persist=True, tf_sec=0):
     """
-    هشدار کلوز کندل — هر بار زمان دقیق کلوز بعدی رو محاسبه می‌کنه.
-    tf_sec: طول تایم‌فریم به ثانیه (M5=300, M15=900, H1=3600, H4=14400)
-    interval_sec: همون tf_sec هست (برای سازگاری با Supabase نگه داشتیم)
+    هشدار کلوز کندل — هر چرخه:
+      1. محاسبه دقیق چند ثانیه تا هشدار کلوز بعدی
+      2. sleep
+      3. یه پیام بفرست
+      4. برگرد به ۱ (برای کندل بعدی)
+    tf_sec: طول تایم‌فریم (M5=300, M15=900, H1=3600, H4=14400)
+    interval_sec: همون tf_sec هست (برای سازگاری Supabase)
     """
+    tf = tf_sec or interval_sec
     if cid not in _reminders:
         _reminders[cid] = {}
-    _reminders[cid][sym] = {"interval": interval_sec, "active": True, "tf_sec": tf_sec}
+    _reminders[cid][sym] = {"interval": tf, "active": True, "tf_sec": tf}
     entry = _reminders[cid][sym]
     if persist:
-        threading.Thread(target=_sb_save_reminder, args=(cid, sym, interval_sec, tf_sec), daemon=True).start()
+        threading.Thread(target=_sb_save_reminder, args=(cid, sym, tf, tf), daemon=True).start()
     def _loop():
         while entry.get("active") and _reminders.get(cid, {}).get(sym, {}).get("active"):
-            tf = entry.get("tf_sec", 0) or tf_sec
-            if tf:
-                wait, _, _ = _candle_info(tf)
-            else:
-                wait = interval_sec
+            wait, _, _ = _candle_info(entry["tf_sec"])
             time.sleep(wait)
             if not _reminders.get(cid, {}).get(sym, {}).get("active"):
                 break
-            _send_reminder(token, cid, sym, tf_sec=tf)
+            _send_reminder(token, cid, sym, tf_sec=entry["tf_sec"])
     threading.Thread(target=_loop, daemon=True).start()
 
 def build_cancel_reminder_msg(cid):
@@ -1015,10 +1000,9 @@ def build_cancel_reminder_msg(cid):
     lines = ["⏰ <b>هشدارهای دوره‌ای فعال:</b>\n"]
     keyboard = []
     for sym, info in active.items():
-        tf = info.get("tf_sec", 0)
-        tf_lbl = _TF_LABEL.get(tf, "")
-        lbl = f"کلوز {tf_lbl}" if tf_lbl else labels.get(info["interval"], f"{info['interval']//60} دقیقه")
-        lines.append(f"• <b>{sym}</b> — {lbl}")
+        tf = info.get("tf_sec", info.get("interval", 0))
+        lbl = _TF_LABEL.get(tf, f"{tf//60}m") if tf else "؟"
+        lines.append(f"• <b>{sym}</b> — کلوز {lbl}")
         keyboard.append([{"text": f"🗑 حذف {sym}", "callback_data": f"cancel_reminder_one:{cid}:{sym}"}])
     keyboard.append([{"text": "✕ کنسل همه", "callback_data": f"cancel_reminder_all:{cid}"}])
     keyboard.append([{"text": "✓ بستن", "callback_data": "close_myalerts"}])
@@ -1178,6 +1162,7 @@ def daily_news_scheduler():
 
 _pending_name  = {}  # cid → True
 _pending_alarm = {}  # cid → {"step": str, "data": dict}
+_pending_reminder = {}  # cid → {step, bot_msg_id}
 
 # ── Reply Keyboard rows ──────────────────────────────────────
 MAIN_MENU = [
@@ -1392,21 +1377,59 @@ def _do_update(upd, token):
                                 kb2 = kb2[:-1] + priv_kb  # بستن رو از pub حذف کن، priv_kb خودش داره
                             edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, txt2, kb2)
 
+                    elif cbq_data.startswith("reminder_new:"):
+                        # reminder_new:CID — انتخاب نماد برای هشدار جدید
+                        answer_callback(token_cbq, cbq_id)
+                        sym_rows = []
+                        row = []
+                        for s in REMINDER_QUICK_SYMBOLS:
+                            row.append({"text": s, "callback_data": f"reminder_sym:{cbq_cid}:{s}"})
+                            if len(row) == 3:
+                                sym_rows.append(row); row = []
+                        if row: sym_rows.append(row)
+                        sym_rows.append([{"text": "✏️ نماد دیگه...", "callback_data": f"reminder_sym:{cbq_cid}:__type__"}])
+                        sym_rows.append([{"text": "✕ بستن", "callback_data": "close_myalerts"}])
+                        edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                            "➕ <b>هشدار جدید</b>\n\nنماد رو انتخاب کن:", sym_rows)
+
+                    elif cbq_data.startswith("reminder_sym:"):
+                        # reminder_sym:CID:SYM — انتخاب تایم‌فریم
+                        parts = cbq_data.split(":", 2)
+                        r_cid = parts[1] if len(parts) > 1 else cbq_cid
+                        r_sym = parts[2] if len(parts) > 2 else ""
+                        answer_callback(token_cbq, cbq_id)
+                        if r_sym == "__type__":
+                            # کاربر باید خودش تایپ کنه
+                            _pending_reminder[cbq_cid] = {"step": "rem_symbol", "bot_msg_id": cbq_msg_id}
+                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                                "✏️ نماد رو بنویس (مثلاً EURUSD):",
+                                [[{"text": "❌ انصراف", "callback_data": "close_myalerts"}]])
+                        else:
+                            kb_tf = [
+                                [{"text": "🕯 M5  (۱ دق قبل کلوز)",  "callback_data": f"reminder_go:{r_cid}:{r_sym}:300"}],
+                                [{"text": "🕯 M15 (۵ دق قبل کلوز)",  "callback_data": f"reminder_go:{r_cid}:{r_sym}:900"}],
+                                [{"text": "🕯 H1  (۱۵ دق قبل کلوز)", "callback_data": f"reminder_go:{r_cid}:{r_sym}:3600"}],
+                                [{"text": "🕯 H4  (۱۵ دق قبل کلوز)", "callback_data": f"reminder_go:{r_cid}:{r_sym}:14400"}],
+                                [{"text": "✕ برگشت", "callback_data": f"reminder_new:{r_cid}"}],
+                            ]
+                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                                f"🕯 تایم‌فریم هشدار برای <b>{r_sym}</b>:", kb_tf)
+
                     elif cbq_data.startswith("set_reminder:"):
-                        # set_reminder:cid:SYM — انتخاب تایم‌فریم کندل
+                        # set_reminder:cid:SYM — از دکمه کنار الارم
                         parts = cbq_data.split(":", 2)
                         r_cid = parts[1] if len(parts) > 1 else cbq_cid
                         r_sym = parts[2] if len(parts) > 2 else "؟"
                         answer_callback(token_cbq, cbq_id)
-                        kb = [
+                        kb_tf = [
                             [{"text": "🕯 M5  (۱ دق قبل کلوز)",  "callback_data": f"reminder_go:{r_cid}:{r_sym}:300"}],
                             [{"text": "🕯 M15 (۵ دق قبل کلوز)",  "callback_data": f"reminder_go:{r_cid}:{r_sym}:900"}],
                             [{"text": "🕯 H1  (۱۵ دق قبل کلوز)", "callback_data": f"reminder_go:{r_cid}:{r_sym}:3600"}],
                             [{"text": "🕯 H4  (۱۵ دق قبل کلوز)", "callback_data": f"reminder_go:{r_cid}:{r_sym}:14400"}],
-                            [{"text": "✕ نه ممنون",               "callback_data": "close_myalerts"}],
+                            [{"text": "✕ نه ممنون", "callback_data": "close_myalerts"}],
                         ]
                         edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
-                            f"🕯 هشدار کلوز کدوم تایم‌فریم برای <b>{r_sym}</b>؟", kb)
+                            f"🕯 تایم‌فریم هشدار کلوز برای <b>{r_sym}</b>:", kb_tf)
 
                     elif cbq_data.startswith("reminder_go:"):
                         parts = cbq_data.split(":")
@@ -1414,28 +1437,26 @@ def _do_update(upd, token):
                         r_sym = parts[2] if len(parts) > 2 else "؟"
                         r_tf  = int(parts[3]) if len(parts) > 3 else 3600
                         tf_label = _TF_LABEL.get(r_tf, f"{r_tf//60}m")
-                        # کلوز اول چند دقیقه دیگه؟
+                        offset_min = _TF_OFFSET.get(r_tf, 300) // 60
                         wait_sec, close_teh, progress = _candle_info(r_tf)
                         wait_min = max(1, wait_sec // 60)
-                        offset_min = _TF_OFFSET.get(r_tf, 300) // 60
                         # کنسل reminder قبلی همین نماد
                         if _reminders.get(r_cid, {}).get(r_sym):
                             _reminders[r_cid][r_sym]["active"] = False
                             del _reminders[r_cid][r_sym]
                             threading.Thread(target=_sb_delete_reminder, args=(r_cid, r_sym), daemon=True).start()
-                        # ثبت جدید
                         _schedule_reminder(token_cbq, r_cid, r_sym, r_tf, tf_sec=r_tf)
                         def _bg_confirm(tok=token_cbq, cid_=cbq_cid, mid=cbq_msg_id, cbid=cbq_id,
                                         sym_=r_sym, tfl=tf_label, wm=wait_min, ct=close_teh,
                                         pr=progress, om=offset_min):
                             answer_callback(tok, cbid, f"✅ هشدار کلوز {tfl} فعال شد")
                             confirm_txt = (
-                                f"✅ هشدار کلوز کندل <b>{tfl}</b> برای <code>{sym_}</code> فعال شد.\n"
-                                f"━━━━━━━━━━━━━━━\n"
+                                f"✅ هشدار کلوز <b>{tfl}</b> برای <code>{sym_}</code> فعال شد.\n"
+                                f"━━━━━━━━━━━━━━━━━━\n"
                                 f"⏰ کلوز بعدی تهران: <b>{ct}</b>\n"
-                                f"📊 پیشرفت کندل فعلی: <b>{pr}%</b>\n"
-                                f"🔔 هشدار اول در: <b>{wm} دقیقه</b> دیگه ({om} دق قبل کلوز)\n"
-                                f"━━━━━━━━━━━━━━━\n"
+                                f"📊 پیشرفت کندل: <b>{pr}%</b>\n"
+                                f"🔔 هشدار اول: <b>{wm} دقیقه</b> دیگه ({om} دق قبل کلوز)\n"
+                                f"━━━━━━━━━━━━━━━━━━\n"
                                 f"برای کنسل: /cancel_reminder"
                             )
                             edit_tg_keyboard(tok, cid_, mid, confirm_txt, [])
@@ -2458,10 +2479,9 @@ def _do_update(upd, token):
                 elif txt == "⏰ هشدار دوره‌ای من":
                     text_msg2, kb2 = build_cancel_reminder_msg(cid)
                     is_adm = (cid == YOUR_CHAT_ID)
-                    if kb2:
-                        send_tg_keyboard(token, cid, text_msg2, kb2)
-                    else:
-                        show_main_menu(token, cid, text_msg2, is_adm)
+                    # دکمه ثبت هشدار جدید همیشه نشون داده میشه
+                    kb2.append([{"text": "➕ هشدار جدید", "callback_data": f"reminder_new:{cid}"}])
+                    send_tg_keyboard(token, cid, text_msg2 if kb2 else "هیچ هشدار فعالی نداری.\n\nمیخوای هشدار جدید بذاری؟", kb2)
 
                 elif txt == "📡 سیگنال جدید":
                     # مرحله ۱ — نماد
@@ -2516,6 +2536,26 @@ def _do_update(upd, token):
                         "⚡ <b>آلارم فوری</b>\n\nاسم نماد رو بنویس:\n<code>EURUSD</code>  <code>XAUUSD</code>  <code>BTC</code>",
                         kb_sos)
                     _pending_alarm[cid] = {"step": "sos_symbol", "data": {}, "bot_msg_id": mid_sos}
+
+                elif cid in _pending_reminder and not txt.startswith("/"):
+                    pr_step = _pending_reminder[cid].get("step")
+                    pr_mid  = _pending_reminder[cid].get("bot_msg_id")
+                    if pr_step == "rem_symbol":
+                        r_sym = txt.upper().replace("/","").strip()
+                        if len(r_sym) < 2:
+                            edit_tg_keyboard(token, cid, pr_mid,
+                                "❌ نماد نامعتبر. دوباره بنویس:", [[{"text":"❌ انصراف","callback_data":"close_myalerts"}]])
+                        else:
+                            del _pending_reminder[cid]
+                            kb_tf = [
+                                [{"text": "🕯 M5  (۱ دق قبل کلوز)",  "callback_data": f"reminder_go:{cid}:{r_sym}:300"}],
+                                [{"text": "🕯 M15 (۵ دق قبل کلوز)",  "callback_data": f"reminder_go:{cid}:{r_sym}:900"}],
+                                [{"text": "🕯 H1  (۱۵ دق قبل کلوز)", "callback_data": f"reminder_go:{cid}:{r_sym}:3600"}],
+                                [{"text": "🕯 H4  (۱۵ دق قبل کلوز)", "callback_data": f"reminder_go:{cid}:{r_sym}:14400"}],
+                                [{"text": "✕ انصراف", "callback_data": "close_myalerts"}],
+                            ]
+                            edit_tg_keyboard(token, cid, pr_mid,
+                                f"🕯 تایم‌فریم هشدار برای <b>{r_sym}</b>:", kb_tf)
 
                 elif cid in _pending_alarm and not txt.startswith("/"):
                     step = _pending_alarm[cid]["step"]
@@ -5736,7 +5776,7 @@ def _restore_reminders():
         cid = str(row["chat_id"])
         sym = row["symbol"]
         interval_sec = int(row["interval_sec"])
-        tf_sec = int(row.get("tf_sec") or 0)
+        tf_sec = int(row.get("tf_sec") or interval_sec)
         _schedule_reminder(token, cid, sym, interval_sec, persist=False, tf_sec=tf_sec)
         count += 1
     print(f"[STARTUP] reminder: {count} هشدار بازیابی شد")
