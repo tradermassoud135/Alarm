@@ -54,6 +54,7 @@ body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(
 
 .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:1rem}
 @media(max-width:600px){.stats{grid-template-columns:1fr 1fr}}
+@media(max-width:520px){.live-pill{display:none}.active-tab-label{display:none}.journal-btn span:last-child{display:none}.journal-btn{padding:7px 10px}.hdr-right{gap:6px}}
 .scard{background:var(--bg2);border:1px solid var(--border);border-radius:var(--rad2);padding:1rem 1.1rem .9rem}
 .scard-lbl{font-size:10px;font-family:var(--mono);color:var(--text3);letter-spacing:.09em;text-transform:uppercase;margin-bottom:8px}
 .scard-val{font-size:24px;font-weight:700;font-family:var(--mono);line-height:1;letter-spacing:-.02em}
@@ -338,8 +339,22 @@ select option{background:var(--bg3)}
 .tf-btn small{display:block;font-size:9px;font-weight:400;opacity:.7;margin-top:2px}
 .tf-btn:hover{border-color:#ff7eb3;color:#ff7eb3;background:rgba(255,126,179,.08)}
 .tf-btn.active{border-color:#ff7eb3;background:rgba(255,126,179,.15);color:#ff7eb3}
+/* ========== Name Modal ========== */
+.name-modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:500;backdrop-filter:blur(4px);align-items:center;justify-content:center}
+.name-modal-overlay.open{display:flex}
+.name-modal{background:var(--bg2);border:1px solid var(--border2);border-radius:var(--rad2);padding:1.8rem 1.6rem;width:min(340px,90vw);text-align:center}
+.name-modal-title{font-family:var(--mono);font-size:15px;font-weight:700;color:var(--text);margin-bottom:6px}
+.name-modal-sub{font-size:12px;color:var(--text2);margin-bottom:1.2rem;line-height:1.5}
+.name-modal input{width:100%;padding:10px 14px;border-radius:10px;border:1px solid var(--border2);background:var(--bg3);color:var(--text);font-family:var(--sans);font-size:14px;outline:none;margin-bottom:1rem;text-align:right}
+.name-modal input:focus{border-color:var(--gold)}
+.name-modal-btns{display:flex;gap:8px}
+.name-modal-btns button{flex:1;padding:10px;border-radius:9px;border:none;cursor:pointer;font-family:var(--sans);font-size:13px;font-weight:600;transition:.18s}
+.nm-cancel{background:var(--bg3);color:var(--text2)}
+.nm-cancel:hover{background:var(--bg4)}
+.nm-ok{background:linear-gradient(135deg,var(--gold),#c87a00);color:#000}
+.nm-ok:hover{opacity:.88}
 
-</style>
+
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
@@ -557,6 +572,19 @@ select option{background:var(--bg3)}
 </div>
 <div id="toast"></div>
 
+<!-- Name Modal (جایگزین prompt) -->
+<div class="name-modal-overlay" id="name-modal-overlay">
+  <div class="name-modal">
+    <div class="name-modal-title">👤 نام خود را وارد کنید</div>
+    <div class="name-modal-sub">این نام در آلارم‌ها و سیگنال‌ها نمایش داده می‌شود</div>
+    <input type="text" id="name-modal-input" placeholder="مثلاً: علی" dir="rtl" maxlength="30">
+    <div class="name-modal-btns">
+      <button class="nm-cancel" id="nm-cancel-btn">بعداً</button>
+      <button class="nm-ok" onclick="nameModalConfirm()">✓ ذخیره</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ── Telegram Mini App ──
 const isTWA = window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData;
@@ -580,23 +608,51 @@ setInterval(() => {
 let _tt;
 function toast(msg) { const el = document.getElementById('toast'); el.textContent = msg; el.classList.add('show'); clearTimeout(_tt); _tt = setTimeout(() => el.classList.remove('show'), 2800); }
 
-// ========== User name (persistent) ==========
+// ========== User name (persistent, no prompt) ==========
+let _nameModalResolve = null;
+
+function showNameModal(currentVal, cancelable) {
+  return new Promise(resolve => {
+    _nameModalResolve = resolve;
+    const inp = document.getElementById('name-modal-input');
+    inp.value = currentVal || '';
+    const cancelBtn = document.getElementById('nm-cancel-btn');
+    if (cancelable) {
+      cancelBtn.style.display = '';
+      cancelBtn.onclick = () => { document.getElementById('name-modal-overlay').classList.remove('open'); resolve(null); };
+    } else {
+      cancelBtn.style.display = 'none';
+    }
+    document.getElementById('name-modal-overlay').classList.add('open');
+    setTimeout(() => inp.focus(), 100);
+  });
+}
+function nameModalConfirm() {
+  const val = document.getElementById('name-modal-input').value.trim();
+  if (!val) { document.getElementById('name-modal-input').focus(); return; }
+  document.getElementById('name-modal-overlay').classList.remove('open');
+  if (_nameModalResolve) { _nameModalResolve(val); _nameModalResolve = null; }
+}
+document.getElementById('name-modal-input').addEventListener('keydown', e => { if (e.key === 'Enter') nameModalConfirm(); });
+
 function getUserName() {
   let name = localStorage.getItem('trader_name');
-  if (!name || name.trim() === '') {
-    name = prompt('👤 لطفاً نام خود را وارد کنید (این نام در آلارم‌ها نمایش داده می‌شود):', '');
-    if (name && name.trim() !== '') localStorage.setItem('trader_name', name.trim());
-    else name = 'ناشناس';
-  }
+  if (!name || name.trim() === '') name = 'ناشناس';
   return name;
 }
+async function ensureUserName() {
+  let name = localStorage.getItem('trader_name');
+  if (!name || name.trim() === '') {
+    const entered = await showNameModal('', false);
+    if (entered) { localStorage.setItem('trader_name', entered); }
+  }
+}
 function updateUserDisplay() { document.getElementById('user-name-display').textContent = getUserName(); }
-function changeUserName() {
-  const newName = prompt('نام جدید خود را وارد کنید:', getUserName());
-  if (newName && newName.trim() !== '') { 
-    localStorage.setItem('trader_name', newName.trim()); 
-    updateUserDisplay(); 
-    // پس از تغییر نام، حالت نمایش را از localStorage بر اساس نام جدید بارگیری کن
+async function changeUserName() {
+  const newName = await showNameModal(getUserName(), true);
+  if (newName && newName.trim() !== '') {
+    localStorage.setItem('trader_name', newName.trim());
+    updateUserDisplay();
     if (currentTab === 'alerts') loadViewMode('all');
     else if (currentTab === 'myalerts') loadViewMode('my');
     filterAlerts();
@@ -1186,12 +1242,15 @@ async function loadAlerts() {
 }
 
 // ========== Initialization ==========
-loadAlerts();
+async function init() {
+  await ensureUserName();
+  updateUserDisplay();
+  loadViewMode('all');
+  loadViewMode('my');
+  loadAlerts();
+}
+init();
 setInterval(loadAlerts, 60000);
-// پس از بارگذاری صفحه، حالت نمایش را برای تب فعال (همه آلارم‌ها) بارگیری کن
-// ابتدا باید نام کاربر مشخص باشد (updateUserDisplay قبلاً فراخوانی شده)
-loadViewMode('all');
-loadViewMode('my');
 </script>
 
 <div id="ver-bar" style="position:fixed;bottom:0;left:0;right:0;background:var(--bg2);border-top:1px solid var(--border);padding:5px 16px;display:flex;align-items:center;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--text3);z-index:100">
