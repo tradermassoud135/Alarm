@@ -67,13 +67,39 @@ body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(
 .user-edit-icon{font-size:14px;color:var(--purple);background:rgba(240,165,0,.15);padding:5px 10px;border-radius:30px;transition:0.2s}
 .user-card:hover .user-edit-icon{background:rgba(240,165,0,.3);transform:rotate(15deg)}
 
-.tabs{display:flex;gap:4px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rad);padding:4px;margin-bottom:1.25rem;width:fit-content;flex-wrap:wrap}
-.tab{padding:7px 16px;border-radius:9px;font-size:12px;font-weight:500;cursor:pointer;color:var(--text2);border:none;background:transparent;font-family:var(--sans);transition:.18s}
-.tab.on{background:var(--bg3);color:var(--text);border:1px solid var(--border2)}
-.tab.on.t-alerts{color:var(--green);border-color:rgba(0,217,139,.3)}
-.tab.on.t-my{color:var(--purple);border-color:rgba(240,165,0,.3)}
-.tab.on.t-arch{color:var(--gold);border-color:rgba(240,165,0,.3)}
-.tab.on.t-users{color:var(--blue);border-color:rgba(77,168,255,.3)}
+/* ── Sidebar nav ── */
+.nav-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:200;backdrop-filter:blur(3px)}
+.nav-overlay.open{display:block}
+.sidebar{position:fixed;top:0;right:0;height:100%;width:260px;background:var(--bg2);border-left:1px solid var(--border);z-index:201;transform:translateX(100%);transition:transform .28s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column;padding:0}
+.sidebar.open{transform:translateX(0)}
+.sidebar-hd{display:flex;align-items:center;justify-content:space-between;padding:1.2rem 1.2rem 1rem;border-bottom:1px solid var(--border)}
+.sidebar-title{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--text);letter-spacing:.04em}
+.sidebar-close{background:none;border:none;color:var(--text3);font-size:18px;cursor:pointer;padding:4px 8px;border-radius:7px;transition:.15s;line-height:1}
+.sidebar-close:hover{background:var(--rdim);color:var(--red)}
+.nav-list{display:flex;flex-direction:column;gap:3px;padding:1rem .8rem;flex:1}
+.nav-item{display:flex;align-items:center;gap:12px;padding:11px 14px;border-radius:10px;border:none;background:transparent;color:var(--text2);font-family:var(--sans);font-size:13px;font-weight:500;cursor:pointer;text-align:right;transition:.18s;width:100%;position:relative}
+.nav-item:hover{background:var(--bg3);color:var(--text)}
+.nav-item.on{background:var(--bg3);color:var(--text);border:1px solid var(--border2)}
+.nav-item.on.n-alerts{color:var(--green)}
+.nav-item.on.n-my{color:var(--purple)}
+.nav-item.on.n-arch{color:var(--gold)}
+.nav-item.on.n-signal{color:var(--blue)}
+.nav-item.on.n-reminder{color:#ff7eb3}
+.nav-icon{font-size:16px;flex-shrink:0}
+.nav-accent{position:absolute;right:0;top:50%;transform:translateY(-50%);width:3px;height:60%;border-radius:3px 0 0 3px;opacity:0;transition:.18s}
+.nav-item.on .nav-accent{opacity:1}
+.nav-item.on.n-alerts .nav-accent{background:var(--green)}
+.nav-item.on.n-my .nav-accent{background:var(--purple)}
+.nav-item.on.n-arch .nav-accent{background:var(--gold)}
+.nav-item.on.n-signal .nav-accent{background:var(--blue)}
+.nav-item.on.n-reminder .nav-accent{background:#ff7eb3}
+.nav-sep{height:1px;background:var(--border);margin:8px 0}
+.menu-btn{width:36px;height:36px;border-radius:9px;background:var(--bg3);border:1px solid var(--border);cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;transition:.18s;flex-shrink:0}
+.menu-btn:hover{border-color:var(--border2)}
+.menu-btn span{width:16px;height:2px;background:var(--text2);border-radius:2px;transition:.18s;display:block}
+.menu-btn:hover span{background:var(--text)}
+/* active tab indicator در هدر */
+.active-tab-label{font-family:var(--mono);font-size:11px;color:var(--text3);background:var(--bg3);border:1px solid var(--border);padding:4px 12px;border-radius:20px;letter-spacing:.03em}
 .pnl{display:none}.pnl.on{display:block}
 
 .sec{background:var(--bg2);border:1px solid var(--border);border-radius:var(--rad2);margin-bottom:1rem;overflow:hidden}
@@ -276,6 +302,43 @@ select option{background:var(--bg3)}
 
 #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);padding:10px 22px;border-radius:10px;font-size:13px;background:var(--bg4);border:1px solid var(--border3);color:var(--text);box-shadow:0 8px 32px rgba(0,0,0,.4);opacity:0;transition:opacity .25s;pointer-events:none;z-index:9999;font-family:var(--sans);white-space:nowrap}
 #toast.show{opacity:1}
+
+/* ── Signal panel ── */
+.signal-form{display:flex;flex-direction:column;gap:16px}
+.sig-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:520px){.sig-row{grid-template-columns:1fr}}
+.sig-preview{background:var(--bg4);border:1px solid var(--border2);border-radius:14px;padding:16px 18px;margin-top:4px;position:relative;cursor:pointer;transition:border-color .2s}
+.sig-preview:hover{border-color:var(--blue)}
+.sig-preview-label{font-size:10px;font-family:var(--mono);color:var(--text3);letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px;display:flex;align-items:center;gap:6px}
+.sig-preview-copy{position:absolute;top:12px;left:12px;background:var(--bg3);border:1px solid var(--border2);color:var(--text3);border-radius:7px;padding:4px 10px;font-size:10px;font-family:var(--mono);cursor:pointer;transition:.2s}
+.sig-preview-copy:hover{color:var(--blue);border-color:rgba(77,168,255,.4)}
+.sig-preview-copy.copied{color:var(--green);border-color:rgba(0,217,139,.4)}
+.sig-preview-text{font-family:var(--mono);font-size:12px;line-height:1.7;white-space:pre-wrap;word-break:break-word;color:var(--text)}
+.sig-action-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.sig-history{display:flex;flex-direction:column;gap:8px;margin-top:4px}
+.sig-hist-item{background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px 14px;cursor:pointer;transition:border-color .2s;position:relative}
+.sig-hist-item:hover{border-color:var(--border2)}
+.sig-hist-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.sig-hist-sym{font-family:var(--mono);font-size:14px;font-weight:700;color:var(--text)}
+.sig-hist-dir.up{color:var(--green)}.sig-hist-dir.dn{color:var(--red)}
+.sig-hist-body{font-size:11px;color:var(--text2);font-family:var(--mono);line-height:1.5}
+.sig-hist-copy{position:absolute;left:10px;bottom:10px;background:var(--bg4);border:1px solid var(--border);color:var(--text3);border-radius:6px;padding:3px 8px;font-size:10px;cursor:pointer;transition:.2s}
+.sig-hist-copy:hover{color:var(--green);border-color:rgba(0,217,139,.3)}
+/* ── Reminder panel ── */
+.rem-form{display:flex;flex-direction:column;gap:14px}
+.rem-list{display:flex;flex-direction:column;gap:8px;margin-top:4px}
+.rem-item{background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+.rem-item-info{display:flex;flex-direction:column;gap:3px}
+.rem-sym{font-family:var(--mono);font-size:14px;font-weight:700;color:var(--text)}
+.rem-tf{font-size:11px;font-family:var(--mono);color:#ff7eb3;background:rgba(255,126,179,.1);border:1px solid rgba(255,126,179,.2);border-radius:20px;padding:2px 10px;display:inline-block}
+.rem-del{background:none;border:none;color:var(--text3);cursor:pointer;padding:6px 10px;border-radius:8px;font-size:14px;transition:.15s}
+.rem-del:hover{background:var(--rdim);color:var(--red)}
+.tf-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:4px}
+.tf-btn{padding:10px 6px;border-radius:10px;border:2px solid var(--border);background:var(--bg4);color:var(--text3);cursor:pointer;font-family:var(--mono);font-size:12px;font-weight:700;transition:.2s;text-align:center;line-height:1.4}
+.tf-btn small{display:block;font-size:9px;font-weight:400;opacity:.7;margin-top:2px}
+.tf-btn:hover{border-color:#ff7eb3;color:#ff7eb3;background:rgba(255,126,179,.08)}
+.tf-btn.active{border-color:#ff7eb3;background:rgba(255,126,179,.15);color:#ff7eb3}
+
 </style>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
@@ -292,11 +355,13 @@ select option{background:var(--bg3)}
     </div>
     <div class="hdr-right">
       <div class="live-pill"><span class="ldot"></span><span id="clk">--:--</span></div>
+      <span class="active-tab-label" id="active-tab-label">📈 آلارم‌ها</span>
       <a href="static/journal.html" class="journal-btn">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
         ژورنال
       </a>
       <button class="theme-btn" id="theme-toggle" onclick="toggleTheme()">🌙</button>
+      <button class="menu-btn" onclick="openNav()" aria-label="منو"><span></span><span></span><span></span></button>
     </div>
   </div>
 
@@ -311,11 +376,37 @@ select option{background:var(--bg3)}
     <div class="user-edit-icon">✎</div>
   </div>
 
-  <div class="tabs">
-    <button class="tab on t-alerts" onclick="switchTab('alerts',this,'all')">📈 همه آلارم‌ها</button>
-    <button class="tab t-my" onclick="switchTab('myalerts',this,'my')">⭐ آلارم‌های من</button>
-    <button class="tab t-arch" onclick="switchTab('archive',this,'')">📦 بایگانی</button>
-    <button class="tab t-users" onclick="switchTab('users',this,'')">👥 کاربران</button>
+  <!-- Sidebar Nav -->
+  <div class="nav-overlay" id="nav-overlay" onclick="closeNav()"></div>
+  <div class="sidebar" id="sidebar">
+    <div class="sidebar-hd">
+      <div class="sidebar-title">📌 منو</div>
+      <button class="sidebar-close" onclick="closeNav()">✕</button>
+    </div>
+    <div class="nav-list">
+      <button class="nav-item on n-alerts" id="nav-alerts" onclick="switchTab('alerts');closeNav()">
+        <span class="nav-icon">📈</span> همه آلارم‌ها
+        <span class="nav-accent"></span>
+      </button>
+      <button class="nav-item n-my" id="nav-myalerts" onclick="switchTab('myalerts');closeNav()">
+        <span class="nav-icon">⭐</span> آلارم‌های من
+        <span class="nav-accent"></span>
+      </button>
+      <div class="nav-sep"></div>
+      <button class="nav-item n-signal" id="nav-signal" onclick="switchTab('signal');closeNav()">
+        <span class="nav-icon">📡</span> ثبت سیگنال
+        <span class="nav-accent"></span>
+      </button>
+      <button class="nav-item n-reminder" id="nav-reminder" onclick="switchTab('reminder');closeNav()">
+        <span class="nav-icon">🔔</span> هشدار کندل
+        <span class="nav-accent"></span>
+      </button>
+      <div class="nav-sep"></div>
+      <button class="nav-item n-arch" id="nav-archive" onclick="switchTab('archive');closeNav()">
+        <span class="nav-icon">📦</span> بایگانی
+        <span class="nav-accent"></span>
+      </button>
+    </div>
   </div>
 
   <!-- ALERTS ALL PANEL -->
@@ -389,11 +480,78 @@ select option{background:var(--bg3)}
     </div>
   </div>
 
-  <!-- USERS PANEL -->
-  <div class="pnl" id="pnl-users">
+  <!-- SIGNAL PANEL -->
+  <div class="pnl" id="pnl-signal">
     <div class="sec">
-      <div class="sec-hd"><div class="sec-ttl"><span class="sec-dot blue"></span>کاربران ثبت‌شده</div><button class="btn btn-sm" onclick="loadUsers()">🔄</button></div>
-      <div class="sec-bd" id="users-body"><div class="empty"><div class="empty-ico">👥</div><p>هنوز کاربری /start نزده</p></div></div>
+      <div class="sec-hd"><div class="sec-ttl"><span class="sec-dot blue"></span>ثبت سیگنال جدید</div></div>
+      <div class="sec-bd">
+        <div class="signal-form">
+          <div class="sig-row">
+            <div class="fld"><label>نماد</label><input type="text" id="sig-sym" placeholder="EURUSD" dir="ltr" oninput="this.value=this.value.toUpperCase();buildSigPreview()"></div>
+            <div class="fld"><label>جهت</label>
+              <div class="dir-toggle" id="sig-dir-toggle">
+                <button type="button" class="dir-btn dir-buy active" id="sig-dir-buy" onclick="setSigDir('buy')">📈 BUY<span class="dir-sub">لانگ</span></button>
+                <button type="button" class="dir-btn dir-sell" id="sig-dir-sell" onclick="setSigDir('sell')">📉 SELL<span class="dir-sub">شورت</span></button>
+              </div>
+              <input type="hidden" id="sig-dir" value="buy">
+            </div>
+          </div>
+          <div class="sig-row">
+            <div class="fld"><label>ورود</label><input type="number" id="sig-entry" placeholder="1.08500" step="any" dir="ltr" oninput="buildSigPreview()"></div>
+            <div class="fld"><label>حد ضرر (SL)</label><input type="number" id="sig-sl" placeholder="1.08200" step="any" dir="ltr" oninput="buildSigPreview()"></div>
+          </div>
+          <div class="sig-row">
+            <div class="fld"><label>هدف ۱ (TP1)</label><input type="number" id="sig-tp1" placeholder="1.09000" step="any" dir="ltr" oninput="buildSigPreview()"></div>
+            <div class="fld"><label>هدف ۲ (TP2)</label><input type="number" id="sig-tp2" placeholder="1.09500" step="any" dir="ltr" oninput="buildSigPreview()"></div>
+          </div>
+          <div class="fld"><label>توضیحات / تحلیل</label><input type="text" id="sig-note" placeholder="بریک اوت سطح کلیدی، CVD divergence..." oninput="buildSigPreview()"></div>
+          <div class="sig-preview" onclick="copySigPreview()" title="کلیک برای کپی">
+            <div class="sig-preview-label">👁 پیش‌نمایش سیگنال <span style="color:var(--blue);margin-right:auto">کلیک = کپی</span></div>
+            <button class="sig-preview-copy" id="sig-copy-btn" onclick="event.stopPropagation();copySigPreview()">📋 کپی</button>
+            <div class="sig-preview-text" id="sig-preview-text">— نماد و جهت را انتخاب کنید —</div>
+          </div>
+          <div class="sig-action-row">
+            <button class="btn btn-blue" onclick="sendSignalToChannel()">📢 ارسال به کانال</button>
+            <button class="btn btn-green" onclick="saveSignalToDb()">💾 ثبت در دیتا</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- تاریخچه سیگنال‌ها -->
+    <div class="sec">
+      <div class="sec-hd"><div class="sec-ttl"><span class="sec-dot blue"></span>سیگنال‌های ثبت‌شده</div><button class="btn btn-sm" onclick="loadSignalHistory()">🔄</button></div>
+      <div class="sec-bd" id="sig-history-body"><div class="empty"><div class="empty-ico">📡</div><p>سیگنالی ثبت نشده</p></div></div>
+    </div>
+  </div>
+
+  <!-- REMINDER PANEL -->
+  <div class="pnl" id="pnl-reminder">
+    <div class="sec">
+      <div class="sec-hd"><div class="sec-ttl"><span class="sec-dot" style="background:#ff7eb3;box-shadow:0 0 6px #ff7eb3"></span>هشدار کلوز کندل</div></div>
+      <div class="sec-bd">
+        <div class="rem-form">
+          <div class="fld">
+            <label>نماد</label>
+            <input type="text" id="rem-sym" placeholder="EURUSD" dir="ltr" oninput="this.value=this.value.toUpperCase()">
+          </div>
+          <div class="fld">
+            <label>تایم‌فریم</label>
+            <div class="tf-grid">
+              <button class="tf-btn" id="tf-M5" onclick="selectTF('M5',300)">M5<small>۱ دق قبل</small></button>
+              <button class="tf-btn active" id="tf-M15" onclick="selectTF('M15',900)">M15<small>۵ دق قبل</small></button>
+              <button class="tf-btn" id="tf-H1" onclick="selectTF('H1',3600)">H1<small>۱۵ دق قبل</small></button>
+              <button class="tf-btn" id="tf-H4" onclick="selectTF('H4',14400)">H4<small>۱۵ دق قبل</small></button>
+            </div>
+            <input type="hidden" id="rem-tf-sec" value="900">
+          </div>
+          <button class="btn btn-green" style="width:100%" onclick="addReminder()">🔔 فعال کردن هشدار</button>
+          <div style="font-size:11px;color:var(--text3);text-align:center;font-family:var(--mono)">هشدار فقط برای شما ثبت می‌شود و از طریق ربات تلگرام ارسال می‌شود</div>
+        </div>
+      </div>
+    </div>
+    <div class="sec">
+      <div class="sec-hd"><div class="sec-ttl"><span class="sec-dot" style="background:#ff7eb3"></span>هشدارهای فعال من</div><button class="btn btn-sm" onclick="loadReminders()">🔄</button></div>
+      <div class="sec-bd" id="rem-list-body"><div class="empty"><div class="empty-ico">🔔</div><p>هشداری فعال نیست</p></div></div>
     </div>
   </div>
 </div>
@@ -450,7 +608,7 @@ updateUserDisplay();
 // ========== Global state ==========
 let allAlertsData = [];
 let allPrivateData = [];   // آلارم‌های شخصی (is_private) که از /api/alerts/my میان
-let currentTab = 'alerts';     // 'alerts', 'myalerts', 'archive', 'users'
+let currentTab = 'alerts';     // 'alerts', 'myalerts', 'archive', 'signal', 'reminder'
 let currentSortAll = 'distance', currentSortMy = 'distance';
 let currentSearchAll = '', currentSearchMy = '';
 let viewModeAll = 'card', viewModeMy = 'card';
@@ -490,18 +648,32 @@ function loadViewMode(panel) {
   }
 }
 
-// ========== Tab switching ==========
-function switchTab(id, el) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('on'));
+// ========== Sidebar nav ==========
+function openNav() {
+  document.getElementById('sidebar').classList.add('open');
+  document.getElementById('nav-overlay').classList.add('open');
+}
+function closeNav() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('nav-overlay').classList.remove('open');
+}
+
+const TAB_LABELS = {alerts:'📈 همه آلارم‌ها', myalerts:'⭐ آلارم‌های من', archive:'📦 بایگانی', signal:'📡 ثبت سیگنال', reminder:'🔔 هشدار کندل'};
+
+function switchTab(id) {
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('on'));
   document.querySelectorAll('.pnl').forEach(p => p.classList.remove('on'));
-  el.classList.add('on');
+  const navEl = document.getElementById('nav-' + id);
+  if (navEl) navEl.classList.add('on');
   document.getElementById('pnl-' + id).classList.add('on');
-  currentTab = id === 'alerts' ? 'alerts' : (id === 'myalerts' ? 'myalerts' : id);
+  currentTab = id;
+  document.getElementById('active-tab-label').textContent = TAB_LABELS[id] || id;
   if (id === 'archive') loadArchive();
-  if (id === 'users') loadUsers();
-  if (id === 'alerts' || id === 'myalerts') { 
+  if (id === 'signal') loadSignalHistory();
+  if (id === 'reminder') loadReminders();
+  if (id === 'alerts' || id === 'myalerts') {
     loadViewMode(id === 'alerts' ? 'all' : 'my');
-    filterAlerts(); 
+    filterAlerts();
   }
 }
 
@@ -821,7 +993,165 @@ async function deleteAlert(id) { if (!confirm('آلارم حذف شود؟')) ret
 async function loadArchive() { try { const r = await fetch(`${API}/api/archive`); const items = await r.json(); document.getElementById('sc-arch').textContent = items.length; const body = document.getElementById('arch-body'); if (!items.length) { body.innerHTML = '<div class="empty"><div class="empty-ico">◎</div><p>بایگانی خالی است</p></div>'; return; } body.innerHTML = items.slice().reverse().map(a => { const ts = new Date(a.fired_at || a.created_at); const tStr = ts.toLocaleString('fa-IR', {timeZone:'Asia/Tehran'}); const cmt = a.comment ? `<div class="arch-cmt">💬 ${a.comment}</div>` : ''; return `<div class="arch-row"><span class="arch-tag">✓ فعال شد</span><div><div class="arch-name">${a.symbol}</div><div class="arch-detail">${a.condition==='above'?'↑':'↓'} هدف: $${fmt(a.target_price,a.symbol)} · فعال‌سازی: $${fmt(a.fired_price,a.symbol)}</div><div class="arch-detail">${tStr}</div>${cmt}</div><button class="btn btn-sm btn-red" onclick="delArchItem('${a.id}')">✕</button></div>`; }).join(''); } catch {} }
 async function clearArchive() { if (!confirm('بایگانی پاک شود؟')) return; await fetch(`${API}/api/archive`, {method:'DELETE'}); toast('پاک شد'); loadArchive(); }
 async function delArchItem(id) { await fetch(`${API}/api/archive/${id}`, {method:'DELETE'}); loadArchive(); }
-async function loadUsers() { try { const r = await fetch(`${API}/api/users`); const users = await r.json(); document.getElementById('sc-users').textContent = users.length; const body = document.getElementById('users-body'); if (!users.length) { body.innerHTML = '<div class="empty"><div class="empty-ico">👥</div><p>هنوز کاربری /start نزده</p></div>'; return; } body.innerHTML = users.map(u => `<div class="user-row"><div class="user-av">👤</div><div><div class="user-name">${u.username || 'کاربر'}</div><div class="user-id">ID: ${u.chat_id}</div></div><span class="user-date">${(u.joined_at||'').slice(0,10)}</span></div>`).join(''); } catch {} }
+async function loadUsers() { try { const r = await fetch(`${API}/api/users`); const users = await r.json(); // sc-users removed const body = document.getElementById('users-body'); if (!users.length) { body.innerHTML = '<div class="empty"><div class="empty-ico">👥</div><p>هنوز کاربری /start نزده</p></div>'; return; } body.innerHTML = users.map(u => `<div class="user-row"><div class="user-av">👤</div><div><div class="user-name">${u.username || 'کاربر'}</div><div class="user-id">ID: ${u.chat_id}</div></div><span class="user-date">${(u.joined_at||'').slice(0,10)}</span></div>`).join(''); } catch {} }
+
+// ========== Signal panel ==========
+let sigDir = 'buy';
+function setSigDir(d) {
+  sigDir = d;
+  document.getElementById('sig-dir').value = d;
+  document.getElementById('sig-dir-buy').classList.toggle('active', d === 'buy');
+  document.getElementById('sig-dir-sell').classList.toggle('active', d === 'sell');
+  buildSigPreview();
+}
+
+function buildSigPreview() {
+  const sym = document.getElementById('sig-sym').value.trim() || '—';
+  const dir = sigDir === 'buy' ? '📈 BUY' : '📉 SELL';
+  const entry = document.getElementById('sig-entry').value || '—';
+  const sl    = document.getElementById('sig-sl').value    || '—';
+  const tp1   = document.getElementById('sig-tp1').value   || '—';
+  const tp2   = document.getElementById('sig-tp2').value   || '—';
+  const note  = document.getElementById('sig-note').value.trim();
+  const lines = [
+    `📊 ${sym}  ${dir}`,
+    `━━━━━━━━━━━━━━━`,
+    `🎯 ورود:  ${entry}`,
+    `🛑 SL:    ${sl}`,
+    `✅ TP1:   ${tp1}`,
+    tp2 !== '—' ? `✅ TP2:   ${tp2}` : null,
+    `━━━━━━━━━━━━━━━`,
+    note ? `💬 ${note}` : null,
+    `⏱ ${new Date().toLocaleTimeString('fa-IR',{timeZone:'Asia/Tehran',hour:'2-digit',minute:'2-digit'})} تهران`
+  ].filter(Boolean).join('\n');
+  document.getElementById('sig-preview-text').textContent = lines;
+  return lines;
+}
+
+function copySigPreview() {
+  const text = buildSigPreview();
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('sig-copy-btn');
+    btn.textContent = '✅ کپی شد';
+    btn.classList.add('copied');
+    toast('✅ سیگنال کپی شد');
+    setTimeout(() => { btn.textContent = '📋 کپی'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+
+async function sendSignalToChannel() {
+  const sym = document.getElementById('sig-sym').value.trim().toUpperCase();
+  if (!sym) { toast('نماد را وارد کنید'); return; }
+  const text = buildSigPreview();
+  const creator = getUserName();
+  try {
+    const r = await fetch(`${API}/api/signal`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ text, symbol: sym, direction: sigDir, creator, action: 'send' })
+    });
+    const d = await r.json();
+    if (d.ok) { toast(`📢 سیگنال به کانال ارسال شد`); loadSignalHistory(); }
+    else toast('❌ ' + (d.error || 'خطا در ارسال'));
+  } catch { toast('❌ خطا در ارتباط'); }
+}
+
+async function saveSignalToDb() {
+  const sym = document.getElementById('sig-sym').value.trim().toUpperCase();
+  if (!sym) { toast('نماد را وارد کنید'); return; }
+  const text = buildSigPreview();
+  const creator = getUserName();
+  try {
+    const r = await fetch(`${API}/api/signal`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ text, symbol: sym, direction: sigDir,
+        entry: document.getElementById('sig-entry').value,
+        sl:    document.getElementById('sig-sl').value,
+        tp1:   document.getElementById('sig-tp1').value,
+        tp2:   document.getElementById('sig-tp2').value,
+        note:  document.getElementById('sig-note').value,
+        creator, action: 'save' })
+    });
+    const d = await r.json();
+    if (d.ok) { toast('💾 سیگنال ذخیره شد'); loadSignalHistory(); }
+    else toast('❌ ' + (d.error || 'خطا'));
+  } catch { toast('❌ خطا در ارتباط'); }
+}
+
+async function loadSignalHistory() {
+  try {
+    const r = await fetch(`${API}/api/signals?limit=20`);
+    const items = await r.json();
+    const body = document.getElementById('sig-history-body');
+    if (!items.length) { body.innerHTML = '<div class="empty"><div class="empty-ico">📡</div><p>سیگنالی ثبت نشده</p></div>'; return; }
+    body.innerHTML = items.map(s => {
+      const dir = s.direction === 'buy' ? '<span class="sig-hist-dir up">📈 BUY</span>' : '<span class="sig-hist-dir dn">📉 SELL</span>';
+      const ts = new Date(s.created_at).toLocaleString('fa-IR',{timeZone:'Asia/Tehran',hour:'2-digit',minute:'2-digit',month:'numeric',day:'numeric'});
+      return `<div class="sig-hist-item">
+        <div class="sig-hist-top"><span class="sig-hist-sym">${s.symbol||'—'}</span>${dir}<span style="font-size:10px;color:var(--text3);font-family:var(--mono)">${ts}</span></div>
+        <div class="sig-hist-body">${(s.text||'').replace(/\n/g,'<br>')}</div>
+        <button class="sig-hist-copy" onclick="navigator.clipboard.writeText(${JSON.stringify(s.text||'')}).then(()=>toast('✅ کپی شد'))">📋 کپی</button>
+      </div>`;
+    }).join('');
+  } catch { }
+}
+
+// ========== Reminder panel ==========
+let selectedTF = 'M15', selectedTFSec = 900;
+function selectTF(label, sec) {
+  selectedTF = label; selectedTFSec = sec;
+  document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tf-' + label).classList.add('active');
+  document.getElementById('rem-tf-sec').value = sec;
+}
+
+async function addReminder() {
+  const sym = document.getElementById('rem-sym').value.trim().toUpperCase();
+  if (!sym) { toast('نماد را وارد کنید'); return; }
+  const creator = getUserName();
+  try {
+    const r = await fetch(`${API}/api/reminder`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ symbol: sym, tf: selectedTF, tf_sec: selectedTFSec, creator })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      toast(`🔔 هشدار ${sym} ${selectedTF} فعال شد`);
+      document.getElementById('rem-sym').value = '';
+      loadReminders();
+    } else toast('❌ ' + (d.error || 'خطا'));
+  } catch { toast('❌ خطا در ارتباط'); }
+}
+
+async function loadReminders() {
+  const creator = getUserName();
+  try {
+    const r = await fetch(`${API}/api/reminders?creator=${encodeURIComponent(creator)}`);
+    const items = await r.json();
+    const body = document.getElementById('rem-list-body');
+    if (!items.length) { body.innerHTML = '<div class="empty"><div class="empty-ico">🔔</div><p>هشداری فعال نیست</p></div>'; return; }
+    const TF_LABEL = {300:'M5',900:'M15',3600:'H1',14400:'H4'};
+    body.innerHTML = items.map(rem => {
+      const tf = TF_LABEL[rem.tf_sec] || rem.tf || '—';
+      return `<div class="rem-item">
+        <div class="rem-item-info"><span class="rem-sym">${rem.symbol}</span><span class="rem-tf">🕯 ${tf}</span></div>
+        <button class="rem-del" onclick="deleteReminder('${rem.id||rem.symbol}','${rem.symbol}')">🗑</button>
+      </div>`;
+    }).join('');
+  } catch { }
+}
+
+async function deleteReminder(id, sym) {
+  const creator = getUserName();
+  try {
+    const r = await fetch(`${API}/api/reminder/${encodeURIComponent(id)}?creator=${encodeURIComponent(creator)}`, {method:'DELETE'});
+    const d = await r.json();
+    if (d.ok) { toast(`🗑 هشدار ${sym} حذف شد`); loadReminders(); }
+    else toast('❌ خطا در حذف');
+  } catch { toast('❌ خطا'); }
+}
 
 let _forexOpen = true;
 async function loadAlerts() {
