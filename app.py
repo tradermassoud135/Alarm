@@ -984,11 +984,19 @@ def _schedule_reminder(token, cid, sym, interval_sec, persist=True, tf_sec=0):
         threading.Thread(target=_sb_save_reminder, args=(cid, sym, tf, tf), daemon=True).start()
     def _loop():
         while entry.get("active") and _reminders.get(cid, {}).get(sym, {}).get("active"):
-            wait, _, _ = _candle_info(entry["tf_sec"])
+            tf = entry["tf_sec"]
+            wait, _, _ = _candle_info(tf)
             time.sleep(wait)
             if not _reminders.get(cid, {}).get(sym, {}).get("active"):
                 break
-            _send_reminder(token, cid, sym, tf_sec=entry["tf_sec"])
+            _send_reminder(token, cid, sym, tf_sec=tf)
+            # بعد از ارسال، صبر تا کندل فعلی کاملاً ببنده
+            # این جلوی ارسال مجدد توی همون کندل رو می‌گیره
+            now_utc = time.time()
+            cur_close = (int(now_utc) // tf + 1) * tf
+            secs_to_close = cur_close - now_utc
+            if secs_to_close > 0:
+                time.sleep(secs_to_close + 2)   # +2 ثانیه بافر
     threading.Thread(target=_loop, daemon=True).start()
 
 def build_cancel_reminder_msg(cid):
