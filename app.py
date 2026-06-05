@@ -246,12 +246,16 @@ def save_alerts(data):
             data.get("telegram",{}),
             data.get("users",[]),
             data.get("errors",[]),
-            list(data.get("alerts",[]))
+            list(data.get("alerts",[])),
+            list(data.get("archive",[]))
         )
         def _bg(snap=snapshot):
-            tg, users, errors, alerts = snap
+            tg, users, errors, alerts, archive = snap
             _sb_upsert_config(tg, users, errors)
             for a in alerts:
+                _sb_upsert_alert(a)
+            # آرشیو رو هم sync کن تا بعد از restart یا cache reset از بین نره
+            for a in archive:
                 _sb_upsert_alert(a)
         threading.Thread(target=_bg, daemon=True).start()
 
@@ -3562,23 +3566,7 @@ def get_archive():
     global _cache_alerts
     # cache رو پاک کن تا آرشیو همیشه تازه از Supabase بخونه
     _cache_alerts = None
-    archive = load_alerts().get("archive", [])
-    # فقط آلارم‌های تیمی و عمومی — شخصی‌ها نمایش داده نمیشن
-    archive = [a for a in archive if not a.get("is_private")]
-    return jsonify(archive)
-
-@app.route("/api/signals", methods=["GET"])
-def get_signals():
-    limit = request.args.get("limit", 20, type=int)
-    sigs = _sb_load_signals(limit=limit)
-    # فقط سیگنال‌های تیمی و عمومی — شخصی‌ها (dbonly بدون channel) نمایش داده نمیشن
-    result = []
-    for s in sigs:
-        if not s.get("channel_msg_id"):
-            continue
-        s["text"] = _build_signal_text(s)
-        result.append(s)
-    return jsonify(result)
+    return jsonify(load_alerts().get("archive", []))
 
 @app.route("/api/archive", methods=["DELETE"])
 def clear_archive():
