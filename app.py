@@ -984,19 +984,11 @@ def _schedule_reminder(token, cid, sym, interval_sec, persist=True, tf_sec=0):
         threading.Thread(target=_sb_save_reminder, args=(cid, sym, tf, tf), daemon=True).start()
     def _loop():
         while entry.get("active") and _reminders.get(cid, {}).get(sym, {}).get("active"):
-            tf = entry["tf_sec"]
-            wait, _, _ = _candle_info(tf)
+            wait, _, _ = _candle_info(entry["tf_sec"])
             time.sleep(wait)
             if not _reminders.get(cid, {}).get(sym, {}).get("active"):
                 break
-            _send_reminder(token, cid, sym, tf_sec=tf)
-            # بعد از ارسال، صبر تا کندل فعلی کاملاً ببنده
-            # این جلوی ارسال مجدد توی همون کندل رو می‌گیره
-            now_utc = time.time()
-            cur_close = (int(now_utc) // tf + 1) * tf
-            secs_to_close = cur_close - now_utc
-            if secs_to_close > 0:
-                time.sleep(secs_to_close + 2)   # +2 ثانیه بافر
+            _send_reminder(token, cid, sym, tf_sec=entry["tf_sec"])
     threading.Thread(target=_loop, daemon=True).start()
 
 def build_cancel_reminder_msg(cid):
@@ -1386,42 +1378,13 @@ def _do_update(upd, token):
                             edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, txt2, kb2)
 
                     elif cbq_data.startswith("reminder_new:"):
-                        # reminder_new:CID — انتخاب نماد برای هشدار جدید
+                        # مستقیم بخواه نماد تایپ بشه — بدون دکمه
                         answer_callback(token_cbq, cbq_id)
-                        sym_rows = []
-                        row = []
-                        for s in REMINDER_QUICK_SYMBOLS:
-                            row.append({"text": s, "callback_data": f"reminder_sym:{cbq_cid}:{s}"})
-                            if len(row) == 3:
-                                sym_rows.append(row); row = []
-                        if row: sym_rows.append(row)
-                        sym_rows.append([{"text": "✏️ نماد دیگه...", "callback_data": f"reminder_sym:{cbq_cid}:__type__"}])
-                        sym_rows.append([{"text": "✕ بستن", "callback_data": "close_myalerts"}])
+                        _pending_reminder[cbq_cid] = {"step": "rem_symbol", "bot_msg_id": cbq_msg_id}
                         edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
-                            "➕ <b>هشدار جدید</b>\n\nنماد رو انتخاب کن:", sym_rows)
-
-                    elif cbq_data.startswith("reminder_sym:"):
-                        # reminder_sym:CID:SYM — انتخاب تایم‌فریم
-                        parts = cbq_data.split(":", 2)
-                        r_cid = parts[1] if len(parts) > 1 else cbq_cid
-                        r_sym = parts[2] if len(parts) > 2 else ""
-                        answer_callback(token_cbq, cbq_id)
-                        if r_sym == "__type__":
-                            # کاربر باید خودش تایپ کنه
-                            _pending_reminder[cbq_cid] = {"step": "rem_symbol", "bot_msg_id": cbq_msg_id}
-                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
-                                "✏️ نماد رو بنویس (مثلاً EURUSD):",
-                                [[{"text": "❌ انصراف", "callback_data": "close_myalerts"}]])
-                        else:
-                            kb_tf = [
-                                [{"text": "🕯 M5  (۱ دق قبل کلوز)",  "callback_data": f"reminder_go:{r_cid}:{r_sym}:300"}],
-                                [{"text": "🕯 M15 (۵ دق قبل کلوز)",  "callback_data": f"reminder_go:{r_cid}:{r_sym}:900"}],
-                                [{"text": "🕯 H1  (۱۵ دق قبل کلوز)", "callback_data": f"reminder_go:{r_cid}:{r_sym}:3600"}],
-                                [{"text": "🕯 H4  (۱۵ دق قبل کلوز)", "callback_data": f"reminder_go:{r_cid}:{r_sym}:14400"}],
-                                [{"text": "✕ برگشت", "callback_data": f"reminder_new:{r_cid}"}],
-                            ]
-                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
-                                f"🕯 تایم‌فریم هشدار برای <b>{r_sym}</b>:", kb_tf)
+                            "✏️ <b>اسم نماد رو بنویس و ارسال کن:</b>\n"
+                            "<code>EURUSD</code>  <code>XAUUSD</code>  <code>BTCUSDT</code>",
+                            [[{"text": "❌ انصراف", "callback_data": "close_myalerts"}]])
 
                     elif cbq_data.startswith("set_reminder:"):
                         # set_reminder:cid:SYM — از دکمه کنار الارم
