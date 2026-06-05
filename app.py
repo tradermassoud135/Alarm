@@ -246,16 +246,12 @@ def save_alerts(data):
             data.get("telegram",{}),
             data.get("users",[]),
             data.get("errors",[]),
-            list(data.get("alerts",[])),
-            list(data.get("archive",[]))
+            list(data.get("alerts",[]))
         )
         def _bg(snap=snapshot):
-            tg, users, errors, alerts, archive = snap
+            tg, users, errors, alerts = snap
             _sb_upsert_config(tg, users, errors)
             for a in alerts:
-                _sb_upsert_alert(a)
-            # آرشیو رو هم sync کن تا بعد از restart یا cache reset از بین نره
-            for a in archive:
                 _sb_upsert_alert(a)
         threading.Thread(target=_bg, daemon=True).start()
 
@@ -1382,13 +1378,42 @@ def _do_update(upd, token):
                             edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, txt2, kb2)
 
                     elif cbq_data.startswith("reminder_new:"):
-                        # مستقیم بخواه نماد تایپ بشه — بدون دکمه
+                        # reminder_new:CID — انتخاب نماد برای هشدار جدید
                         answer_callback(token_cbq, cbq_id)
-                        _pending_reminder[cbq_cid] = {"step": "rem_symbol", "bot_msg_id": cbq_msg_id}
+                        sym_rows = []
+                        row = []
+                        for s in REMINDER_QUICK_SYMBOLS:
+                            row.append({"text": s, "callback_data": f"reminder_sym:{cbq_cid}:{s}"})
+                            if len(row) == 3:
+                                sym_rows.append(row); row = []
+                        if row: sym_rows.append(row)
+                        sym_rows.append([{"text": "✏️ نماد دیگه...", "callback_data": f"reminder_sym:{cbq_cid}:__type__"}])
+                        sym_rows.append([{"text": "✕ بستن", "callback_data": "close_myalerts"}])
                         edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
-                            "✏️ <b>اسم نماد رو بنویس و ارسال کن:</b>\n"
-                            "<code>EURUSD</code>  <code>XAUUSD</code>  <code>BTCUSDT</code>",
-                            [[{"text": "❌ انصراف", "callback_data": "close_myalerts"}]])
+                            "➕ <b>هشدار جدید</b>\n\nنماد رو انتخاب کن:", sym_rows)
+
+                    elif cbq_data.startswith("reminder_sym:"):
+                        # reminder_sym:CID:SYM — انتخاب تایم‌فریم
+                        parts = cbq_data.split(":", 2)
+                        r_cid = parts[1] if len(parts) > 1 else cbq_cid
+                        r_sym = parts[2] if len(parts) > 2 else ""
+                        answer_callback(token_cbq, cbq_id)
+                        if r_sym == "__type__":
+                            # کاربر باید خودش تایپ کنه
+                            _pending_reminder[cbq_cid] = {"step": "rem_symbol", "bot_msg_id": cbq_msg_id}
+                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                                "✏️ نماد رو بنویس (مثلاً EURUSD):",
+                                [[{"text": "❌ انصراف", "callback_data": "close_myalerts"}]])
+                        else:
+                            kb_tf = [
+                                [{"text": "🕯 M5  (۱ دق قبل کلوز)",  "callback_data": f"reminder_go:{r_cid}:{r_sym}:300"}],
+                                [{"text": "🕯 M15 (۵ دق قبل کلوز)",  "callback_data": f"reminder_go:{r_cid}:{r_sym}:900"}],
+                                [{"text": "🕯 H1  (۱۵ دق قبل کلوز)", "callback_data": f"reminder_go:{r_cid}:{r_sym}:3600"}],
+                                [{"text": "🕯 H4  (۱۵ دق قبل کلوز)", "callback_data": f"reminder_go:{r_cid}:{r_sym}:14400"}],
+                                [{"text": "✕ برگشت", "callback_data": f"reminder_new:{r_cid}"}],
+                            ]
+                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                                f"🕯 تایم‌فریم هشدار برای <b>{r_sym}</b>:", kb_tf)
 
                     elif cbq_data.startswith("set_reminder:"):
                         # set_reminder:cid:SYM — از دکمه کنار الارم
@@ -3563,10 +3588,37 @@ def del_alert(aid):
 
 @app.route("/api/archive", methods=["GET"])
 def get_archive():
+    """مستقیم از Supabase بخون — بدون cache"""
     global _cache_alerts
-    # cache رو پاک کن تا آرشیو همیشه تازه از Supabase بخونه
-    _cache_alerts = None
-    return jsonify(load_alerts().get("archive", []))
+    if not SUPABASE_KEY:
+        _cache_alerts = None
+        return jsonify(load_alerts().get("archive", []))
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/alerts",
+            headers=_sb_h(),
+            params={"status": "eq.fired", "order": "fired_at.desc", "limit": "500"},
+            timeout=10
+        )
+        rows = r.json() if r.status_code == 200 else []
+        archive = []
+        for row in rows:
+            archive.append({
+                "id":          row.get("id"),
+                "symbol":      row.get("symbol"),
+                "condition":   row.get("condition"),
+                "target_price":row.get("target_price"),
+                "fired_price": row.get("fired_price"),
+                "fired_at":    row.get("fired_at"),
+                "created_at":  row.get("created_at"),
+                "comment":     row.get("comment",""),
+                "created_by":  row.get("created_by",""),
+                "active":      False,
+            })
+        return jsonify(archive)
+    except Exception as e:
+        print(f"[archive] direct fetch error: {e}")
+        return jsonify(load_alerts().get("archive", []))
 
 @app.route("/api/archive", methods=["DELETE"])
 def clear_archive():
