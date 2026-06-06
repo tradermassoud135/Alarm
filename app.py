@@ -989,6 +989,13 @@ def _schedule_reminder(token, cid, sym, interval_sec, persist=True, tf_sec=0):
             if not _reminders.get(cid, {}).get(sym, {}).get("active"):
                 break
             _send_reminder(token, cid, sym, tf_sec=entry["tf_sec"])
+            # بعد از ارسال پیام، صبر کن تا کلوز کندل رد بشه — جلوی تکرار رو میگیره
+            tf = entry["tf_sec"]
+            now_utc = time.time()
+            cur_close = (int(now_utc) // tf + 1) * tf
+            sleep_after = cur_close - now_utc + 5  # ۵ ثانیه بعد از کلوز
+            if sleep_after > 0:
+                time.sleep(sleep_after)
     threading.Thread(target=_loop, daemon=True).start()
 
 def build_cancel_reminder_msg(cid):
@@ -1378,19 +1385,12 @@ def _do_update(upd, token):
                             edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, txt2, kb2)
 
                     elif cbq_data.startswith("reminder_new:"):
-                        # reminder_new:CID — انتخاب نماد برای هشدار جدید
+                        # reminder_new:CID — مستقیم از کاربر نماد بگیر
                         answer_callback(token_cbq, cbq_id)
-                        sym_rows = []
-                        row = []
-                        for s in REMINDER_QUICK_SYMBOLS:
-                            row.append({"text": s, "callback_data": f"reminder_sym:{cbq_cid}:{s}"})
-                            if len(row) == 3:
-                                sym_rows.append(row); row = []
-                        if row: sym_rows.append(row)
-                        sym_rows.append([{"text": "✏️ نماد دیگه...", "callback_data": f"reminder_sym:{cbq_cid}:__type__"}])
-                        sym_rows.append([{"text": "✕ بستن", "callback_data": "close_myalerts"}])
+                        _pending_reminder[cbq_cid] = {"step": "rem_symbol", "bot_msg_id": cbq_msg_id}
                         edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
-                            "➕ <b>هشدار جدید</b>\n\nنماد رو انتخاب کن:", sym_rows)
+                            "➕ <b>هشدار جدید</b>\n\nنماد رو بنویس (مثلاً BTCUSDT یا XAUUSD):",
+                            [[{"text": "❌ انصراف", "callback_data": "close_myalerts"}]])
 
                     elif cbq_data.startswith("reminder_sym:"):
                         # reminder_sym:CID:SYM — انتخاب تایم‌فریم
