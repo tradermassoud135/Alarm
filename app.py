@@ -527,6 +527,57 @@ def get_price(symbol, asset_type):
 _bot_msg_ids: dict = {}
 _BOT_MSG_MAX = 200  # حداکثر تعداد id هر چت
 
+# ── ردیابی پیام‌های fired alert در همه چت‌ها ──────────────────
+# { alert_id: { chat_id: message_id, ... } }
+_fired_msg_ids: dict = {}
+
+def _sb_save_fired_msgs(alert_id: str, cid_to_mid: dict):
+    """map چت‌آیدی → مسیج‌آیدی یه آلارم fired رو توی Supabase ذخیره کن"""
+    if not SUPABASE_KEY: return
+    try:
+        payload = {
+            "id": alert_id,
+            "msg_map": json.dumps(cid_to_mid),
+            "created_at": now_teh()
+        }
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/fired_msgs",
+            headers={**_sb_h(), "Prefer": "resolution=merge-duplicates,return=minimal"},
+            json=payload, timeout=8)
+        if r.status_code not in (200, 201, 204):
+            print(f"[fired_msgs] save error: {r.status_code} {r.text[:80]}")
+    except Exception as e:
+        print(f"[fired_msgs] save exc: {e}")
+
+def _sb_load_fired_msgs():
+    """همه fired_msgs رو از Supabase بخون و توی _fired_msg_ids لود کن"""
+    if not SUPABASE_KEY: return
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/fired_msgs?select=*&limit=2000",
+            headers=_sb_h(), timeout=10)
+        if r.status_code == 200:
+            for row in r.json():
+                aid = row.get("id")
+                raw = row.get("msg_map", "{}")
+                if aid:
+                    _fired_msg_ids[aid] = json.loads(raw) if isinstance(raw, str) else (raw or {})
+            print(f"[fired_msgs] لود شد — {len(_fired_msg_ids)} آلارم")
+        else:
+            print(f"[fired_msgs] load error: {r.status_code} {r.text[:80]}")
+    except Exception as e:
+        print(f"[fired_msgs] load exc: {e}")
+
+def _sb_delete_fired_msgs(alert_id: str):
+    """fired_msgs یه آلارم رو از Supabase پاک کن"""
+    if not SUPABASE_KEY: return
+    try:
+        requests.delete(
+            f"{SUPABASE_URL}/rest/v1/fired_msgs?id=eq.{alert_id}",
+            headers=_sb_h(), timeout=8)
+    except Exception as e:
+        print(f"[fired_msgs] delete exc: {e}")
+
 def _track_msg(chat_id: str, msg_id: int):
     """id پیام ربات رو ذخیره کن (غیر از fired alerts)"""
     cid = str(chat_id)
@@ -1428,7 +1479,7 @@ def _do_update(upd, token):
                             [{"text": "🕯 H4  (۱۵ دق قبل کلوز)", "callback_data": f"reminder_go:{r_cid}:{r_sym}:14400"}],
                             [{"text": "✕ نه ممنون", "callback_data": "close_myalerts"}],
                         ]
-                        edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                        send_tg_keyboard(token_cbq, cbq_cid,
                             f"🕯 تایم‌فریم هشدار کلوز برای <b>{r_sym}</b>:", kb_tf)
 
                     elif cbq_data.startswith("reminder_go:"):
@@ -1446,7 +1497,7 @@ def _do_update(upd, token):
                             del _reminders[r_cid][r_sym]
                             threading.Thread(target=_sb_delete_reminder, args=(r_cid, r_sym), daemon=True).start()
                         _schedule_reminder(token_cbq, r_cid, r_sym, r_tf, tf_sec=r_tf)
-                        def _bg_confirm(tok=token_cbq, cid_=cbq_cid, mid=cbq_msg_id, cbid=cbq_id,
+                        def _bg_confirm(tok=token_cbq, cid_=cbq_cid, cbid=cbq_id,
                                         sym_=r_sym, tfl=tf_label, wm=wait_min, ct=close_teh,
                                         pr=progress, om=offset_min):
                             answer_callback(tok, cbid, f"✅ هشدار کلوز {tfl} فعال شد")
@@ -1459,7 +1510,7 @@ def _do_update(upd, token):
                                 f"━━━━━━━━━━━━━━━━━━\n"
                                 f"برای کنسل: /cancel_reminder"
                             )
-                            edit_tg_keyboard(tok, cid_, mid, confirm_txt, [])
+                            send_tg(tok, cid_, confirm_txt)
                         threading.Thread(target=_bg_confirm, daemon=True).start()
 
                     elif cbq_data.startswith("cancel_reminder_one:"):
@@ -2348,12 +2399,18 @@ def _do_update(upd, token):
                             f"✅ <b>آلارم فوری ارسال شد!</b>\n\n"
                             f"💰 <b>{sym_sc}</b>  {dir_lbl_sc}\n"
                             f"⏰ {now_pretty()} (تهران)", [])
-                        def _bg_sos(tok=token_cbq, tgts=targets_sc, msg=out_sc, s=sym_sc):
+                        sos_aid = f"sos_{sym_sc}_{int(time.time())}"
+                        def _bg_sos(tok=token_cbq, tgts=targets_sc, msg=out_sc, s=sym_sc, aid=sos_aid):
+                            sos_cid_to_mid = {}
                             for tc_sc in tgts:
                                 kb_sc = [[{"text": "⏰ هشدار دوره‌ای", "callback_data": f"set_reminder:{tc_sc}:{s}"}]]
-                                send_tg_keyboard(tok, str(tc_sc), msg, kb_sc, track=False)
+                                mid_sc = send_tg_keyboard(tok, str(tc_sc), msg, kb_sc, track=False)
+                                if mid_sc:
+                                    sos_cid_to_mid[str(tc_sc)] = mid_sc
+                            if sos_cid_to_mid:
+                                _fired_msg_ids[aid] = sos_cid_to_mid
+                                threading.Thread(target=_sb_save_fired_msgs, args=(aid, sos_cid_to_mid), daemon=True).start()
                         threading.Thread(target=_bg_sos, daemon=True).start()
-                    return
 
                 msg = upd.get("message", {})
                 raw_txt = msg.get("text", "") or ""
@@ -2436,6 +2493,36 @@ def _do_update(upd, token):
                     cur = next((u.get("custom_name","") for u in users if str(u.get("chat_id",""))==cid), "")
                     cur_info = f"\nاسم فعلی: <b>{cur}</b>" if cur else ""
                     send_tg(token, cid, f"✏️ اسم جدیدت رو بنویس:{cur_info}")
+
+                # ── /del — حذف پیام fired از همه چت‌ها ────────────
+                elif txt.strip() == "/del":
+                    replied = msg.get("reply_to_message", {})
+                    replied_mid = replied.get("message_id")
+                    if not replied_mid:
+                        send_tg(token, cid, "⚠️ باید روی پیام آلارم ریپلای بزنی و /del بنویسی.")
+                    else:
+                        # پیدا کردن alert_id از روی message_id توی این چت
+                        target_aid = None
+                        for aid, cid_map in _fired_msg_ids.items():
+                            if str(cid_map.get(cid)) == str(replied_mid):
+                                target_aid = aid
+                                break
+                        if not target_aid:
+                            send_tg(token, cid, "⚠️ این پیام توی لیست آلارم‌های ذخیره‌شده نیست یا قبلاً پاک شده.")
+                        else:
+                            cid_map = _fired_msg_ids.pop(target_aid, {})
+                            deleted_count = 0
+                            for tc, tm in cid_map.items():
+                                try:
+                                    r_del = requests.post(
+                                        f"https://api.telegram.org/bot{token}/deleteMessage",
+                                        json={"chat_id": tc, "message_id": tm},
+                                        timeout=5, headers=H)
+                                    if r_del.status_code == 200:
+                                        deleted_count += 1
+                                except: pass
+                            threading.Thread(target=_sb_delete_fired_msgs, args=(target_aid,), daemon=True).start()
+                            send_tg(token, cid, f"🗑 پیام آلارم از <b>{deleted_count}</b> چت پاک شد.")
 
                 # ── منو Reply Keyboard ──────────────────────────────
                 # ── منو Reply Keyboard ──────────────────────────────
@@ -3169,12 +3256,21 @@ def check_alerts():
                         )
                         # دکمه هشدار دوره‌ای برای همه — چه شخصی چه عمومی
                         reminder_kb = lambda cid: [[{"text": "⏰ هشدار دوره‌ای", "callback_data": f"set_reminder:{cid}:{sym}"}]]
+                        fired_cid_to_mid = {}
                         if a.get("is_private") and a.get("notify_only"):
                             priv_cid = str(a["notify_only"])
-                            send_tg_keyboard(token, priv_cid, fired_msg, reminder_kb(priv_cid), track=False)
+                            mid_f = send_tg_keyboard(token, priv_cid, fired_msg, reminder_kb(priv_cid), track=False)
+                            if mid_f:
+                                fired_cid_to_mid[priv_cid] = mid_f
                         else:
                             for cid in notify_cids:
-                                send_tg_keyboard(token, str(cid), fired_msg, reminder_kb(str(cid)), track=False)
+                                mid_f = send_tg_keyboard(token, str(cid), fired_msg, reminder_kb(str(cid)), track=False)
+                                if mid_f:
+                                    fired_cid_to_mid[str(cid)] = mid_f
+                        # ذخیره map چت→پیام برای /del
+                        if fired_cid_to_mid:
+                            _fired_msg_ids[a["id"]] = fired_cid_to_mid
+                            threading.Thread(target=_sb_save_fired_msgs, args=(a["id"], fired_cid_to_mid), daemon=True).start()
                         # فوری توی Supabase آپدیت کن
                         save_alert_fired(a)
             if fired:
@@ -5814,6 +5910,9 @@ threading.Thread(target=poll_telegram, daemon=True).start()
 print("[STARTUP] thread poll_telegram شروع شد")
 threading.Thread(target=poll_open_trades, daemon=True).start()
 print("[STARTUP] thread poll_open_trades شروع شد")
+
+# ── بازیابی fired_msgs از Supabase بعد از restart ──
+_sb_load_fired_msgs()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
