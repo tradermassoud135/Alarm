@@ -2503,7 +2503,9 @@ def _do_update(upd, token):
                     else:
                         # پیدا کردن alert_id از روی message_id توی این چت
                         target_aid = None
+                        print(f"[DEL] replied_mid={replied_mid} cid={cid} fired_count={len(_fired_msg_ids)}")
                         for aid, cid_map in _fired_msg_ids.items():
+                            print(f"[DEL] checking aid={aid} map={cid_map}")
                             if str(cid_map.get(cid)) == str(replied_mid):
                                 target_aid = aid
                                 break
@@ -2958,10 +2960,17 @@ def _do_update(upd, token):
                         )
                         _, all_cids, _ = _get_token_and_cids()
                         targets = all_cids if BROADCAST_MODE else [YOUR_CHAT_ID]
+                        sos_aid_txt = f"sos_{sym}_{int(time.time())}"
+                        sos_cid_to_mid_txt = {}
                         for tc in targets:
-                            send_tg_keyboard(token, tc, out_msg,
+                            mid_sos_txt = send_tg_keyboard(token, tc, out_msg,
                                 [[{"text": "⏰ هشدار دوره‌ای", "callback_data": f"set_reminder:{tc}:{sym}"}]],
                                 track=False)
+                            if mid_sos_txt:
+                                sos_cid_to_mid_txt[str(tc)] = mid_sos_txt
+                        if sos_cid_to_mid_txt:
+                            _fired_msg_ids[sos_aid_txt] = sos_cid_to_mid_txt
+                            threading.Thread(target=_sb_save_fired_msgs, args=(sos_aid_txt, sos_cid_to_mid_txt), daemon=True).start()
                         d = load_alerts()
                         arch = d.get("archive", [])
                         arch.append({"id": str(int(time.time()*1000)), "symbol": sym, "type": atype,
@@ -2970,8 +2979,6 @@ def _do_update(upd, token):
                             "instant": True, "created_at": now_teh()})
                         d["archive"] = arch
                         save_alerts(d)
-                        # چت پاک بشه
-                        threading.Thread(target=delete_chat_history, args=(token, cid), daemon=True).start()
 
                 # ── /alarm ───────────────────────────────────────────
                 elif txt.startswith("/alarm") and (cid == YOUR_CHAT_ID or BROADCAST_MODE):
@@ -3011,8 +3018,6 @@ def _do_update(upd, token):
                             d["alerts"].append(new_alert)
                             _sb_upsert_alert(new_alert)
                             _cache_alerts = d
-                            # چت پاک بشه و پیام تأیید بده
-                            threading.Thread(target=delete_chat_history, args=(token, cid), daemon=True).start()
                             _is_adm_alarm = (cid == YOUR_CHAT_ID)
                             confirm_alarm_txt = (
                                 f"✅ آلارم ثبت شد\n\n"
