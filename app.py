@@ -578,6 +578,59 @@ def _sb_delete_fired_msgs(alert_id: str):
     except Exception as e:
         print(f"[fired_msgs] delete exc: {e}")
 
+# ── شمارنده هشتگ نماد ────────────────────────────────────────
+# { "XAUUSD": 12, "BTCUSDT": 3, ... }  — در حافظه cache
+_sym_counters: dict = {}
+
+def _sb_next_sym_counter(sym: str) -> int:
+    """
+    شمارنده نماد رو یکی افزایش بده و مقدار جدید رو برگردون.
+    اگه جدول symbol_counters نداشتیم از حافظه استفاده میکنه.
+    """
+    global _sym_counters
+    if SUPABASE_KEY:
+        try:
+            # خوندن مقدار فعلی
+            r = requests.get(
+                f"{SUPABASE_URL}/rest/v1/symbol_counters?id=eq.{sym}&select=counter",
+                headers=_sb_h(), timeout=6)
+            if r.status_code == 200 and r.json():
+                cur = int(r.json()[0]["counter"])
+            else:
+                cur = _sym_counters.get(sym, 0)
+            new_val = cur + 1
+            # upsert
+            requests.post(
+                f"{SUPABASE_URL}/rest/v1/symbol_counters",
+                headers={**_sb_h(), "Prefer": "resolution=merge-duplicates,return=minimal"},
+                json={"id": sym, "counter": new_val}, timeout=6)
+            _sym_counters[sym] = new_val
+            return new_val
+        except Exception as e:
+            print(f"[counter] exc: {e}")
+    # fallback حافظه
+    _sym_counters[sym] = _sym_counters.get(sym, 0) + 1
+    return _sym_counters[sym]
+
+def _sb_load_sym_counters():
+    """همه شمارنده‌ها رو از Supabase لود کن"""
+    if not SUPABASE_KEY: return
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/symbol_counters?select=*",
+            headers=_sb_h(), timeout=8)
+        if r.status_code == 200:
+            for row in r.json():
+                _sym_counters[row["id"]] = int(row["counter"])
+            print(f"[counter] لود شد — {len(_sym_counters)} نماد")
+    except Exception as e:
+        print(f"[counter] load exc: {e}")
+
+def _make_alarm_tag(sym: str) -> str:
+    """هشتگ منحصربه‌فرد برای آلارم — مثلاً #XAUUSD7"""
+    n = _sb_next_sym_counter(sym)
+    return f"#{sym}{n}"
+
 def _track_msg(chat_id: str, msg_id: int):
     """id پیام ربات رو ذخیره کن (غیر از fired alerts)"""
     cid = str(chat_id)
@@ -2379,7 +2432,7 @@ def _do_update(upd, token):
                         dir_lbl_sc = dw_sc.get("dir_lbl", "📈 BUY" if condition_sc == "below" else "📉 SELL")
                         atype_sc = "forex" if any(x in sym_sc for x in ["EUR","GBP","JPY","XAU","XAG","CHF","CAD","AUD","NZD"]) else "crypto"
                         sender_sc = _get_user_custom_name(sc_cid) or cbq_cid
-                        hashtag_sc = "#" + re.sub(r"[^\w]","_", sender_sc).strip("_")
+                        hashtag_sc = _make_alarm_tag(sym_sc)
                         arrow_sc = "📈 ناحیه سل" if condition_sc == "above" else "📉 ناحیه بای"
                         try: cur_sc = get_price(sym_sc, atype_sc)
                         except: cur_sc = None
@@ -2408,6 +2461,7 @@ def _do_update(upd, token):
                                 if mid_sc:
                                     sos_cid_to_mid[str(tc_sc)] = mid_sc
                             if sos_cid_to_mid:
+                                sos_cid_to_mid["__tag__"] = f"#{sym_sc}{_sym_counters.get(sym_sc, 0)}"
                                 _fired_msg_ids[aid] = sos_cid_to_mid
                                 threading.Thread(target=_sb_save_fired_msgs, args=(aid, sos_cid_to_mid), daemon=True).start()
                         threading.Thread(target=_bg_sos, daemon=True).start()
@@ -2495,36 +2549,51 @@ def _do_update(upd, token):
                     send_tg(token, cid, f"✏️ اسم جدیدت رو بنویس:{cur_info}")
 
                 # ── /del — حذف پیام fired از همه چت‌ها ────────────
-                elif txt.strip() == "/del":
+                # فرمت‌ها: ریپلای روی پیام + /del
+                #          یا /del XAUUSD7
+                elif txt.strip().startswith("/del"):
+                    del_parts = txt.strip().split(maxsplit=1)
+                    del_tag = del_parts[1].upper().lstrip("#") if len(del_parts) > 1 else None
                     replied = msg.get("reply_to_message", {})
                     replied_mid = replied.get("message_id")
-                    if not replied_mid:
-                        send_tg(token, cid, "⚠️ باید روی پیام آلارم ریپلای بزنی و /del بنویسی.")
-                    else:
-                        # پیدا کردن alert_id از روی message_id توی این چت
-                        target_aid = None
-                        print(f"[DEL] replied_mid={replied_mid} cid={cid} fired_count={len(_fired_msg_ids)}")
+
+                    target_aid = None
+
+                    if del_tag:
+                        # جستجو با هشتگ — مثلاً /del XAUUSD7
+                        tag_search = f"#{del_tag}"
                         for aid, cid_map in _fired_msg_ids.items():
-                            print(f"[DEL] checking aid={aid} map={cid_map}")
+                            if cid_map.get("__tag__") == tag_search:
+                                target_aid = aid
+                                break
+                        if not target_aid:
+                            send_tg(token, cid, f"⚠️ آلارم <b>{tag_search}</b> پیدا نشد یا قبلاً پاک شده.")
+                    elif replied_mid:
+                        # جستجو با ریپلای
+                        for aid, cid_map in _fired_msg_ids.items():
                             if str(cid_map.get(cid)) == str(replied_mid):
                                 target_aid = aid
                                 break
                         if not target_aid:
                             send_tg(token, cid, "⚠️ این پیام توی لیست آلارم‌های ذخیره‌شده نیست یا قبلاً پاک شده.")
-                        else:
-                            cid_map = _fired_msg_ids.pop(target_aid, {})
-                            deleted_count = 0
-                            for tc, tm in cid_map.items():
-                                try:
-                                    r_del = requests.post(
-                                        f"https://api.telegram.org/bot{token}/deleteMessage",
-                                        json={"chat_id": tc, "message_id": tm},
-                                        timeout=5, headers=H)
-                                    if r_del.status_code == 200:
-                                        deleted_count += 1
-                                except: pass
-                            threading.Thread(target=_sb_delete_fired_msgs, args=(target_aid,), daemon=True).start()
-                            send_tg(token, cid, f"🗑 پیام آلارم از <b>{deleted_count}</b> چت پاک شد.")
+                    else:
+                        send_tg(token, cid, "⚠️ روی پیام آلارم ریپلای بزن یا بنویس /del XAUUSD7")
+
+                    if target_aid:
+                        cid_map = _fired_msg_ids.pop(target_aid, {})
+                        deleted_count = 0
+                        for tc, tm in cid_map.items():
+                            if tc == "__tag__": continue
+                            try:
+                                r_del = requests.post(
+                                    f"https://api.telegram.org/bot{token}/deleteMessage",
+                                    json={"chat_id": tc, "message_id": tm},
+                                    timeout=5, headers=H)
+                                if r_del.status_code == 200:
+                                    deleted_count += 1
+                            except: pass
+                        threading.Thread(target=_sb_delete_fired_msgs, args=(target_aid,), daemon=True).start()
+                        send_tg(token, cid, f"🗑 پیام آلارم از <b>{deleted_count}</b> چت پاک شد.")
 
                 # ── منو Reply Keyboard ──────────────────────────────
                 # ── منو Reply Keyboard ──────────────────────────────
@@ -2816,7 +2885,7 @@ def _do_update(upd, token):
                         condition_s = dw["condition"]
                         atype_s = "forex" if any(x in sym_s for x in ["EUR","GBP","JPY","XAU","XAG","CHF","CAD","AUD","NZD"]) else "crypto"
                         sender_s = _get_user_custom_name(cid) or uname
-                        hashtag_s = "#" + re.sub(r"[^\w]","_", sender_s).strip("_")
+                        hashtag_s = _make_alarm_tag(sym_s)
                         arrow_s = "📈 ناحیه سل" if condition_s == "above" else "📉 ناحیه بای"
                         dir_lbl_s = dw.get("dir_lbl", "📈 BUY" if condition_s == "below" else "📉 SELL")
                         try: cur_s = get_price(sym_s, atype_s)
@@ -2950,7 +3019,7 @@ def _do_update(upd, token):
                         arrow = "📈 ناحیه سل" if condition == "above" else "📉 ناحیه بای"
                         cmt = f"\n💬 <i>{comment}</i>" if comment else ""
                         price_text = fmt_price(cur, sym) if cur else "—"
-                        hashtag = "#" + re.sub(r'[^\w]', '_', sender_name).strip('_')
+                        hashtag = _make_alarm_tag(sym)
                         out_msg = (
                             f"🚨 <b>آلارم فوری!</b>\n\n"
                             f"💰 <b>{sym}</b> — {arrow}\n"
@@ -2969,6 +3038,7 @@ def _do_update(upd, token):
                             if mid_sos_txt:
                                 sos_cid_to_mid_txt[str(tc)] = mid_sos_txt
                         if sos_cid_to_mid_txt:
+                            sos_cid_to_mid_txt["__tag__"] = hashtag
                             _fired_msg_ids[sos_aid_txt] = sos_cid_to_mid_txt
                             threading.Thread(target=_sb_save_fired_msgs, args=(sos_aid_txt, sos_cid_to_mid_txt), daemon=True).start()
                         d = load_alerts()
@@ -3248,7 +3318,7 @@ def check_alerts():
                         cmt = f"\n💬 <i>{comment}</i>" if comment else ""
                         dist = calc_dist_str(sym, atype, cur, tgt)
                         private_label = "\n\n🔒 <i>آلارم شخصی — فقط برای شما ارسال شده</i>" if a.get("is_private") else ""
-                        hashtag = "#" + re.sub(r'[^\w]', '_', creator).strip('_')
+                        hashtag = _make_alarm_tag(sym)
                         fired_msg = (
                             f"🚨 <b>آلارم قیمت!</b>\n\n"
                             f"💰 <b>{sym}</b> — {arrow}\n"
@@ -3274,6 +3344,7 @@ def check_alerts():
                                     fired_cid_to_mid[str(cid)] = mid_f
                         # ذخیره map چت→پیام برای /del
                         if fired_cid_to_mid:
+                            fired_cid_to_mid["__tag__"] = hashtag
                             _fired_msg_ids[a["id"]] = fired_cid_to_mid
                             threading.Thread(target=_sb_save_fired_msgs, args=(a["id"], fired_cid_to_mid), daemon=True).start()
                         # فوری توی Supabase آپدیت کن
@@ -3787,7 +3858,7 @@ def instant_alert():
     cmt = f"\n💬 <i>{comment}</i>" if comment else ""
     price_text = fmt_price(cur, sym) if cur else "—"
     _creator = creator or 'سیستم'
-    hashtag = "#" + re.sub(r'[^\w]', '_', _creator).strip('_')
+    hashtag = _make_alarm_tag(sym)
     out_msg = (
         f"🚨 <b>{'آلارم قیمت' if target_price else 'آلارم فوری'}!</b>\n\n"
         f"💰 <b>{sym}</b> — {arrow}\n"
@@ -5916,8 +5987,9 @@ print("[STARTUP] thread poll_telegram شروع شد")
 threading.Thread(target=poll_open_trades, daemon=True).start()
 print("[STARTUP] thread poll_open_trades شروع شد")
 
-# ── بازیابی fired_msgs از Supabase بعد از restart ──
+# ── بازیابی fired_msgs و counters از Supabase بعد از restart ──
 _sb_load_fired_msgs()
+_sb_load_sym_counters()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
