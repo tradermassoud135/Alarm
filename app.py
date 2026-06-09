@@ -2432,15 +2432,16 @@ def _do_update(upd, token):
                         dir_lbl_sc = dw_sc.get("dir_lbl", "📈 BUY" if condition_sc == "below" else "📉 SELL")
                         atype_sc = "forex" if any(x in sym_sc for x in ["EUR","GBP","JPY","XAU","XAG","CHF","CAD","AUD","NZD"]) else "crypto"
                         sender_sc = _get_user_custom_name(sc_cid) or cbq_cid
-                        hashtag_sc = _make_alarm_tag(sym_sc)
+                        alarm_tag_sc = _make_alarm_tag(sym_sc)
+                        sender_tag_sc = "#" + re.sub(r"[^\w]","_", sender_sc).strip("_")
                         arrow_sc = "📈 ناحیه سل" if condition_sc == "above" else "📉 ناحیه بای"
                         try: cur_sc = get_price(sym_sc, atype_sc)
                         except: cur_sc = None
                         out_sc = (
                             f"🚨 <b>آلارم فوری!</b>\n"
                             f"━━━━━━━━━━━━━━━━━━\n"
-                            f"💰 <b>{sym_sc}</b>  {arrow_sc}\n"
-                            f"👤 {hashtag_sc}\n"
+                            f"💰 <b>{alarm_tag_sc}</b>  {arrow_sc}\n"
+                            f"👤 {sender_tag_sc}\n"
                             f"📊 قیمت: <b>{fmt_price(cur_sc, sym_sc) if cur_sc else '—'}</b>\n"
                             f"━━━━━━━━━━━━━━━━━━\n"
                             f"⏰ {now_pretty()} (تهران)"
@@ -2885,7 +2886,8 @@ def _do_update(upd, token):
                         condition_s = dw["condition"]
                         atype_s = "forex" if any(x in sym_s for x in ["EUR","GBP","JPY","XAU","XAG","CHF","CAD","AUD","NZD"]) else "crypto"
                         sender_s = _get_user_custom_name(cid) or uname
-                        hashtag_s = _make_alarm_tag(sym_s)
+                        alarm_tag_s = _make_alarm_tag(sym_s)
+                        sender_tag_s = "#" + re.sub(r"[^\w]","_", sender_s).strip("_")
                         arrow_s = "📈 ناحیه سل" if condition_s == "above" else "📉 ناحیه بای"
                         dir_lbl_s = dw.get("dir_lbl", "📈 BUY" if condition_s == "below" else "📉 SELL")
                         try: cur_s = get_price(sym_s, atype_s)
@@ -2893,8 +2895,8 @@ def _do_update(upd, token):
                         out_s = (
                             f"🚨 <b>آلارم فوری!</b>\n"
                             f"━━━━━━━━━━━━━━━━━━\n"
-                            f"💰 <b>{sym_s}</b>  {arrow_s}\n"
-                            f"👤 {hashtag_s}\n"
+                            f"💰 <b>{alarm_tag_s}</b>  {arrow_s}\n"
+                            f"👤 {sender_tag_s}\n"
                             f"📊 قیمت: <b>{fmt_price(cur_s, sym_s) if cur_s else '—'}</b>\n"
                             + (f"💬 {comment_s}\n" if comment_s else "")
                             + f"━━━━━━━━━━━━━━━━━━\n"
@@ -3020,10 +3022,11 @@ def _do_update(upd, token):
                         cmt = f"\n💬 <i>{comment}</i>" if comment else ""
                         price_text = fmt_price(cur, sym) if cur else "—"
                         hashtag = _make_alarm_tag(sym)
+                        sender_hashtag = "#" + re.sub(r'[^\w]', '_', sender_name).strip('_')
                         out_msg = (
                             f"🚨 <b>آلارم فوری!</b>\n\n"
-                            f"💰 <b>{sym}</b> — {arrow}\n"
-                            f"👤 {hashtag}\n\n"
+                            f"💰 <b>{hashtag}</b> — {arrow}\n"
+                            f"👤 {sender_hashtag}\n\n"
                             f"📊 قیمت لحظه‌ای: <b>{price_text}</b>"
                             f"{cmt}\n\n⏰ {now_pretty()} (تهران)"
                         )
@@ -3319,10 +3322,11 @@ def check_alerts():
                         dist = calc_dist_str(sym, atype, cur, tgt)
                         private_label = "\n\n🔒 <i>آلارم شخصی — فقط برای شما ارسال شده</i>" if a.get("is_private") else ""
                         hashtag = _make_alarm_tag(sym)
+                        creator_tag = "#" + re.sub(r'[^\w]', '_', creator).strip('_')
                         fired_msg = (
                             f"🚨 <b>آلارم قیمت!</b>\n\n"
-                            f"💰 <b>{sym}</b> — {arrow}\n"
-                            f"👤 {hashtag}\n\n"
+                            f"💰 <b>{hashtag}</b> — {arrow}\n"
+                            f"👤 {creator_tag}\n\n"
                             f"🎯 هدف: <code>{fmt_price(tgt,sym)}</code>\n"
                             f"📊 قیمت لحظه‌ای: <b>{fmt_price(cur,sym)}</b>\n"
                             f"📏 فاصله: <b>{dist}</b>"
@@ -3859,10 +3863,11 @@ def instant_alert():
     price_text = fmt_price(cur, sym) if cur else "—"
     _creator = creator or 'سیستم'
     hashtag = _make_alarm_tag(sym)
+    creator_tag = "#" + re.sub(r'[^\w]', '_', _creator).strip('_')
     out_msg = (
         f"🚨 <b>{'آلارم قیمت' if target_price else 'آلارم فوری'}!</b>\n\n"
-        f"💰 <b>{sym}</b> — {arrow}\n"
-        f"👤 {hashtag}\n\n"
+        f"💰 <b>{hashtag}</b> — {arrow}\n"
+        f"👤 {creator_tag}\n\n"
         + (f"🎯 هدف: <code>{fmt_price(target_price, sym)}</code>\n" if target_price else "")
         + f"📊 قیمت لحظه‌ای: <b>{price_text}</b>"
         f"{cmt}\n\n⏰ {now_pretty()} (تهران)"
