@@ -84,6 +84,8 @@ def _sb_upsert_alert(a):
             "fired_price":  float(a["fired_price"]) if a.get("fired_price") is not None else None,
         }
         # فیلدهای اختیاری — فقط اگه توی جدول وجود داشت اضافه میشن
+        if a.get("tag"):
+            payload["tag"] = a["tag"]
         if a.get("private_cid") is not None:
             payload["private_cid"] = str(a["private_cid"]) if a["private_cid"] else None
 
@@ -2432,7 +2434,7 @@ def _do_update(upd, token):
                         dir_lbl_sc = dw_sc.get("dir_lbl", "📈 BUY" if condition_sc == "below" else "📉 SELL")
                         atype_sc = "forex" if any(x in sym_sc for x in ["EUR","GBP","JPY","XAU","XAG","CHF","CAD","AUD","NZD"]) else "crypto"
                         sender_sc = _get_user_custom_name(sc_cid) or cbq_cid
-                        alarm_tag_sc = _make_alarm_tag(sym_sc)
+                        alarm_num_tag_sc = _make_alarm_tag(sym_sc)
                         sender_tag_sc = "#" + re.sub(r"[^\w]","_", sender_sc).strip("_")
                         arrow_sc = "📈 ناحیه سل" if condition_sc == "above" else "📉 ناحیه بای"
                         try: cur_sc = get_price(sym_sc, atype_sc)
@@ -2440,7 +2442,8 @@ def _do_update(upd, token):
                         out_sc = (
                             f"🚨 <b>آلارم فوری!</b>\n"
                             f"━━━━━━━━━━━━━━━━━━\n"
-                            f"💰 <b>{alarm_tag_sc}</b>  {arrow_sc}\n"
+                            f"💰 <b>#{sym_sc}</b>  {arrow_sc}\n"
+                            f"🔖 {alarm_num_tag_sc}\n"
                             f"👤 {sender_tag_sc}\n"
                             f"📊 قیمت: <b>{fmt_price(cur_sc, sym_sc) if cur_sc else '—'}</b>\n"
                             f"━━━━━━━━━━━━━━━━━━\n"
@@ -2454,7 +2457,8 @@ def _do_update(upd, token):
                             f"💰 <b>{sym_sc}</b>  {dir_lbl_sc}\n"
                             f"⏰ {now_pretty()} (تهران)", [])
                         sos_aid = f"sos_{sym_sc}_{int(time.time())}"
-                        def _bg_sos(tok=token_cbq, tgts=targets_sc, msg=out_sc, s=sym_sc, aid=sos_aid):
+                        def _bg_sos(tok=token_cbq, tgts=targets_sc, msg=out_sc, s=sym_sc, aid=sos_aid,
+                                    atag=alarm_num_tag_sc, sndr=sender_sc, cond=condition_sc, atp=atype_sc, cur=cur_sc):
                             sos_cid_to_mid = {}
                             for tc_sc in tgts:
                                 kb_sc = [[{"text": "⏰ هشدار دوره‌ای", "callback_data": f"set_reminder:{tc_sc}:{s}"}]]
@@ -2462,9 +2466,18 @@ def _do_update(upd, token):
                                 if mid_sc:
                                     sos_cid_to_mid[str(tc_sc)] = mid_sc
                             if sos_cid_to_mid:
-                                sos_cid_to_mid["__tag__"] = f"#{sym_sc}{_sym_counters.get(sym_sc, 0)}"
+                                sos_cid_to_mid["__tag__"] = atag
                                 _fired_msg_ids[aid] = sos_cid_to_mid
                                 threading.Thread(target=_sb_save_fired_msgs, args=(aid, sos_cid_to_mid), daemon=True).start()
+                            # ذخیره توی archive
+                            sos_arch_entry = {"id": aid, "symbol": s, "type": atp,
+                                "condition": cond, "comment": "", "created_by": sndr,
+                                "active": False, "fired_at": now_teh(), "fired_price": cur,
+                                "instant": True, "created_at": now_teh(), "tag": atag}
+                            d_arc = load_alerts()
+                            d_arc.setdefault("archive", []).append(sos_arch_entry)
+                            save_alerts(d_arc)
+                            threading.Thread(target=_sb_upsert_alert, args=(sos_arch_entry,), daemon=True).start()
                         threading.Thread(target=_bg_sos, daemon=True).start()
 
                 msg = upd.get("message", {})
@@ -2886,7 +2899,7 @@ def _do_update(upd, token):
                         condition_s = dw["condition"]
                         atype_s = "forex" if any(x in sym_s for x in ["EUR","GBP","JPY","XAU","XAG","CHF","CAD","AUD","NZD"]) else "crypto"
                         sender_s = _get_user_custom_name(cid) or uname
-                        alarm_tag_s = _make_alarm_tag(sym_s)
+                        alarm_num_tag_s = _make_alarm_tag(sym_s)
                         sender_tag_s = "#" + re.sub(r"[^\w]","_", sender_s).strip("_")
                         arrow_s = "📈 ناحیه سل" if condition_s == "above" else "📉 ناحیه بای"
                         dir_lbl_s = dw.get("dir_lbl", "📈 BUY" if condition_s == "below" else "📉 SELL")
@@ -2895,7 +2908,8 @@ def _do_update(upd, token):
                         out_s = (
                             f"🚨 <b>آلارم فوری!</b>\n"
                             f"━━━━━━━━━━━━━━━━━━\n"
-                            f"💰 <b>{alarm_tag_s}</b>  {arrow_s}\n"
+                            f"💰 <b>#{sym_s}</b>  {arrow_s}\n"
+                            f"🔖 {alarm_num_tag_s}\n"
                             f"👤 {sender_tag_s}\n"
                             f"📊 قیمت: <b>{fmt_price(cur_s, sym_s) if cur_s else '—'}</b>\n"
                             + (f"💬 {comment_s}\n" if comment_s else "")
@@ -3021,11 +3035,12 @@ def _do_update(upd, token):
                         arrow = "📈 ناحیه سل" if condition == "above" else "📉 ناحیه بای"
                         cmt = f"\n💬 <i>{comment}</i>" if comment else ""
                         price_text = fmt_price(cur, sym) if cur else "—"
-                        hashtag = _make_alarm_tag(sym)
+                        alarm_num_tag = _make_alarm_tag(sym)
                         sender_hashtag = "#" + re.sub(r'[^\w]', '_', sender_name).strip('_')
                         out_msg = (
                             f"🚨 <b>آلارم فوری!</b>\n\n"
-                            f"💰 <b>{hashtag}</b> — {arrow}\n"
+                            f"💰 <b>#{sym}</b> — {arrow}\n"
+                            f"🔖 {alarm_num_tag}\n"
                             f"👤 {sender_hashtag}\n\n"
                             f"📊 قیمت لحظه‌ای: <b>{price_text}</b>"
                             f"{cmt}\n\n⏰ {now_pretty()} (تهران)"
@@ -3041,17 +3056,19 @@ def _do_update(upd, token):
                             if mid_sos_txt:
                                 sos_cid_to_mid_txt[str(tc)] = mid_sos_txt
                         if sos_cid_to_mid_txt:
-                            sos_cid_to_mid_txt["__tag__"] = hashtag
+                            sos_cid_to_mid_txt["__tag__"] = alarm_num_tag
                             _fired_msg_ids[sos_aid_txt] = sos_cid_to_mid_txt
                             threading.Thread(target=_sb_save_fired_msgs, args=(sos_aid_txt, sos_cid_to_mid_txt), daemon=True).start()
                         d = load_alerts()
                         arch = d.get("archive", [])
-                        arch.append({"id": str(int(time.time()*1000)), "symbol": sym, "type": atype,
+                        new_sos_entry = {"id": str(int(time.time()*1000)), "symbol": sym, "type": atype,
                             "condition": condition, "comment": comment, "created_by": sender_name,
                             "active": False, "fired_at": now_teh(), "fired_price": cur,
-                            "instant": True, "created_at": now_teh()})
+                            "instant": True, "created_at": now_teh(), "tag": alarm_num_tag}
+                        arch.append(new_sos_entry)
                         d["archive"] = arch
                         save_alerts(d)
+                        threading.Thread(target=_sb_upsert_alert, args=(new_sos_entry,), daemon=True).start()
 
                 # ── /alarm ───────────────────────────────────────────
                 elif txt.startswith("/alarm") and (cid == YOUR_CHAT_ID or BROADCAST_MODE):
@@ -3321,11 +3338,12 @@ def check_alerts():
                         cmt = f"\n💬 <i>{comment}</i>" if comment else ""
                         dist = calc_dist_str(sym, atype, cur, tgt)
                         private_label = "\n\n🔒 <i>آلارم شخصی — فقط برای شما ارسال شده</i>" if a.get("is_private") else ""
-                        hashtag = _make_alarm_tag(sym)
+                        alarm_num_tag = _make_alarm_tag(sym)
                         creator_tag = "#" + re.sub(r'[^\w]', '_', creator).strip('_')
                         fired_msg = (
                             f"🚨 <b>آلارم قیمت!</b>\n\n"
-                            f"💰 <b>{hashtag}</b> — {arrow}\n"
+                            f"💰 <b>#{sym}</b> — {arrow}\n"
+                            f"🔖 {alarm_num_tag}\n"
                             f"👤 {creator_tag}\n\n"
                             f"🎯 هدف: <code>{fmt_price(tgt,sym)}</code>\n"
                             f"📊 قیمت لحظه‌ای: <b>{fmt_price(cur,sym)}</b>\n"
@@ -3348,9 +3366,11 @@ def check_alerts():
                                     fired_cid_to_mid[str(cid)] = mid_f
                         # ذخیره map چت→پیام برای /del
                         if fired_cid_to_mid:
-                            fired_cid_to_mid["__tag__"] = hashtag
+                            fired_cid_to_mid["__tag__"] = alarm_num_tag
                             _fired_msg_ids[a["id"]] = fired_cid_to_mid
                             threading.Thread(target=_sb_save_fired_msgs, args=(a["id"], fired_cid_to_mid), daemon=True).start()
+                        # ذخیره tag روی آلارم
+                        a["tag"] = alarm_num_tag
                         # فوری توی Supabase آپدیت کن
                         save_alert_fired(a)
             if fired:
@@ -3862,11 +3882,12 @@ def instant_alert():
     cmt = f"\n💬 <i>{comment}</i>" if comment else ""
     price_text = fmt_price(cur, sym) if cur else "—"
     _creator = creator or 'سیستم'
-    hashtag = _make_alarm_tag(sym)
+    alarm_num_tag = _make_alarm_tag(sym)
     creator_tag = "#" + re.sub(r'[^\w]', '_', _creator).strip('_')
     out_msg = (
         f"🚨 <b>{'آلارم قیمت' if target_price else 'آلارم فوری'}!</b>\n\n"
-        f"💰 <b>{hashtag}</b> — {arrow}\n"
+        f"💰 <b>#{sym}</b> — {arrow}\n"
+        f"🔖 {alarm_num_tag}\n"
         f"👤 {creator_tag}\n\n"
         + (f"🎯 هدف: <code>{fmt_price(target_price, sym)}</code>\n" if target_price else "")
         + f"📊 قیمت لحظه‌ای: <b>{price_text}</b>"
