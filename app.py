@@ -2467,6 +2467,7 @@ def _do_update(upd, token):
                                     sos_cid_to_mid[str(tc_sc)] = mid_sc
                             if sos_cid_to_mid:
                                 sos_cid_to_mid["__tag__"] = atag
+                                sos_cid_to_mid["__text__"] = msg
                                 _fired_msg_ids[aid] = sos_cid_to_mid
                                 threading.Thread(target=_sb_save_fired_msgs, args=(aid, sos_cid_to_mid), daemon=True).start()
                             # ذخیره توی archive
@@ -2597,7 +2598,7 @@ def _do_update(upd, token):
                         cid_map = _fired_msg_ids.pop(target_aid, {})
                         deleted_count = 0
                         for tc, tm in cid_map.items():
-                            if tc == "__tag__": continue
+                            if tc in ("__tag__", "__text__"): continue
                             try:
                                 r_del = requests.post(
                                     f"https://api.telegram.org/bot{token}/deleteMessage",
@@ -2609,8 +2610,43 @@ def _do_update(upd, token):
                         threading.Thread(target=_sb_delete_fired_msgs, args=(target_aid,), daemon=True).start()
                         send_tg(token, cid, f"🗑 پیام آلارم از <b>{deleted_count}</b> چت پاک شد.")
 
-                # ── منو Reply Keyboard ──────────────────────────────
-                # ── منو Reply Keyboard ──────────────────────────────
+                # ── /check — ثبت در ژورنال روی پیام ─────────────
+                elif txt.strip() == "/check":
+                    replied = msg.get("reply_to_message", {})
+                    replied_mid = replied.get("message_id")
+                    replied_text = replied.get("text") or replied.get("caption") or ""
+                    if not replied_mid:
+                        send_tg(token, cid, "⚠️ باید روی پیام آلارم ریپلای بزنی و /check بنویسی.")
+                    else:
+                        # پیدا کردن alert_id از روی message_id توی این چت
+                        target_aid = None
+                        for aid, cid_map in _fired_msg_ids.items():
+                            if str(cid_map.get(cid)) == str(replied_mid):
+                                target_aid = aid
+                                break
+                        if not target_aid:
+                            send_tg(token, cid, "⚠️ این پیام توی لیست آلارم‌های ذخیره‌شده نیست یا قبلاً ثبت شده.")
+                        else:
+                            cid_map = _fired_msg_ids.get(target_aid, {})
+                            orig_text = cid_map.get("__text__") or replied_text
+                            journal_line = f"\n──────────────\n📋 ثبت شد در ژورنال\n🕐 {now_pretty()}"
+                            new_text = orig_text + journal_line
+                            edited_count = 0
+                            for tc, tm in cid_map.items():
+                                if tc in ("__tag__", "__text__"): continue
+                                try:
+                                    r_edit = requests.post(
+                                        f"https://api.telegram.org/bot{token}/editMessageText",
+                                        json={"chat_id": tc, "message_id": tm,
+                                              "text": new_text, "parse_mode": "HTML"},
+                                        timeout=8, headers=H)
+                                    if r_edit.status_code == 200:
+                                        edited_count += 1
+                                except: pass
+                            if edited_count:
+                                send_tg(token, cid, f"✅ در <b>{edited_count}</b> چت ثبت شد.")
+                            else:
+                                send_tg(token, cid, "⚠️ نشد ویرایش کرد.")
                 elif txt in ("📊 وضعیت",) or (txt.startswith("/status") and txt not in ("/statuspage",)):
                     d2 = load_alerts()
                     all_active2 = [a for a in d2.get("alerts",[]) if a.get("active")]
@@ -3057,6 +3093,7 @@ def _do_update(upd, token):
                                 sos_cid_to_mid_txt[str(tc)] = mid_sos_txt
                         if sos_cid_to_mid_txt:
                             sos_cid_to_mid_txt["__tag__"] = alarm_num_tag
+                            sos_cid_to_mid_txt["__text__"] = out_msg
                             _fired_msg_ids[sos_aid_txt] = sos_cid_to_mid_txt
                             threading.Thread(target=_sb_save_fired_msgs, args=(sos_aid_txt, sos_cid_to_mid_txt), daemon=True).start()
                         d = load_alerts()
@@ -3367,6 +3404,7 @@ def check_alerts():
                         # ذخیره map چت→پیام برای /del
                         if fired_cid_to_mid:
                             fired_cid_to_mid["__tag__"] = alarm_num_tag
+                            fired_cid_to_mid["__text__"] = fired_msg
                             _fired_msg_ids[a["id"]] = fired_cid_to_mid
                             threading.Thread(target=_sb_save_fired_msgs, args=(a["id"], fired_cid_to_mid), daemon=True).start()
                         # ذخیره tag روی آلارم
