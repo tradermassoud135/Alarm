@@ -2611,14 +2611,15 @@ def _do_update(upd, token):
                         send_tg(token, cid, f"🗑 پیام آلارم از <b>{deleted_count}</b> چت پاک شد.")
 
                 # ── /check — ثبت در ژورنال روی پیام ─────────────
-                elif txt.strip() == "/check":
+                elif txt.strip().startswith("/check"):
+                    check_parts = txt.strip().split(maxsplit=1)
+                    check_note = check_parts[1].strip() if len(check_parts) > 1 else ""
                     replied = msg.get("reply_to_message", {})
                     replied_mid = replied.get("message_id")
                     replied_text = replied.get("text") or replied.get("caption") or ""
                     if not replied_mid:
                         send_tg(token, cid, "⚠️ باید روی پیام آلارم ریپلای بزنی و /check بنویسی.")
                     else:
-                        # پیدا کردن alert_id از روی message_id توی این چت
                         target_aid = None
                         for aid, cid_map in _fired_msg_ids.items():
                             if str(cid_map.get(cid)) == str(replied_mid):
@@ -2629,7 +2630,8 @@ def _do_update(upd, token):
                         else:
                             cid_map = _fired_msg_ids.get(target_aid, {})
                             orig_text = cid_map.get("__text__") or replied_text
-                            journal_line = f"\n──────────────\n📋 ثبت شد در ژورنال\n🕐 {now_pretty()}"
+                            note_line = f"\n🗒 {check_note}" if check_note else ""
+                            journal_line = f"\n──────────────\n📋 ثبت شد در ژورنال{note_line}\n🕐 {now_pretty()}"
                             new_text = orig_text + journal_line
                             edited_count = 0
                             for tc, tm in cid_map.items():
