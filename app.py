@@ -2600,6 +2600,54 @@ def _do_update(upd, token):
                                 timeout=8, headers=H)
                         except: pass
 
+                    elif cbq_data.startswith("trigger_list:"):
+                        answer_callback(token_cbq, cbq_id, "⏳ در حال بارگذاری...")
+                        tl_cid = cbq_data.split(":", 1)[1]
+                        rows_tl = _sb_load_active_assignments()
+                        my_name_tl = _get_user_custom_name(tl_cid) or ""
+                        if not rows_tl:
+                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                                "🎯 <b>لیست تریگر</b>\n\n📭 هیچ آلارم فعالی در لیست تریگر نیست.",
+                                [[{"text": "↩️ بازگشت", "callback_data": f"trigger_list_close:{tl_cid}"}]])
+                        else:
+                            # گروه‌بندی بر اساس مسئول
+                            by_member = {}
+                            unassigned = []
+                            for row_tl in rows_tl:
+                                m = row_tl.get("assigned_to", "")
+                                tag = row_tl.get("alarm_tag", "—")
+                                shift_tl = row_tl.get("shift", "")
+                                if m:
+                                    by_member.setdefault(m, []).append((tag, shift_tl))
+                                else:
+                                    unassigned.append((tag, shift_tl))
+                            lines_tl = ["🎯 <b>لیست تریگر فعال</b>\n"]
+                            for member, items in sorted(by_member.items()):
+                                marker = " 👈" if member == my_name_tl else ""
+                                lines_tl.append(f"👤 <b>{member}</b>{marker}")
+                                for tag_tl, sh_tl in items:
+                                    lines_tl.append(f"   • {tag_tl}")
+                                lines_tl.append("")
+                            if unassigned:
+                                lines_tl.append("⏳ <b>منتظر تقسیم (شب/آخر هفته)</b>")
+                                for tag_tl, sh_tl in unassigned:
+                                    lines_tl.append(f"   • {tag_tl}")
+                            full_tl = "\n".join(lines_tl)
+                            if len(full_tl) > 4000:
+                                full_tl = full_tl[:3980] + "\n\n<i>...</i>"
+                            kb_tl = [[{"text": "🔄 بروزرسانی", "callback_data": f"trigger_list:{tl_cid}"},
+                                      {"text": "✕ بستن",       "callback_data": f"trigger_list_close:{tl_cid}"}]]
+                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, full_tl, kb_tl)
+
+                    elif cbq_data.startswith("trigger_list_close:"):
+                        answer_callback(token_cbq, cbq_id, "بسته شد")
+                        try:
+                            requests.post(
+                                f"https://api.telegram.org/bot{token_cbq}/deleteMessage",
+                                json={"chat_id": cbq_cid, "message_id": cbq_msg_id},
+                                timeout=8, headers=H)
+                        except: pass
+
                     elif cbq_data.startswith("sig_send:"):
                         parts_snd = cbq_data.split(":", 2)
                         send_cid  = parts_snd[1]
@@ -3037,6 +3085,7 @@ def _do_update(upd, token):
                     status_kb.append([{"text": "✏️ ویرایش اسم", "callback_data": f"edit_name:{cid}"}])
                     status_kb.append([{"text": "📡 سیگنال‌های من", "callback_data": f"signals_view:{cid}:mine"},
                                       {"text": "📊 همه سیگنال‌ها", "callback_data": f"signals_view:{cid}:all"}])
+                    status_kb.append([{"text": "🎯 لیست تریگر", "callback_data": f"trigger_list:{cid}"}])
                     send_tg_keyboard(token, cid, status_text, status_kb)
 
                 elif txt == "⭐ آلارم‌های من":
@@ -3748,7 +3797,9 @@ def check_alerts():
                         if _assignee:
                             assignee_line = f"\n\n🎯 مسئول تریگر: <b>{_assignee}</b>"
                         else:
-                            assignee_line = ""  # شب — بدون مسئول
+                            assignee_line = ""
+                        created_at_raw = a.get("created_at", "")
+                        created_label = f" | 📅 ثبت: <i>{created_at_raw[:16]}</i>" if created_at_raw else ""
                         fired_msg = (
                             f"🚨 <b>آلارم قیمت!</b>\n\n"
                             f"💰 <b>#{sym}</b> — {arrow}\n"
@@ -3759,7 +3810,7 @@ def check_alerts():
                             f"📏 فاصله: <b>{dist}</b>"
                             f"{cmt}"
                             f"{private_label}"
-                            f"{assignee_line}\n\n⏰ {now_pretty()} (تهران)"
+                            f"{assignee_line}\n\n⏰ {now_pretty()} (تهران){created_label}"
                         )
                         # دکمه هشدار دوره‌ای برای همه — چه شخصی چه عمومی
                         reminder_kb = lambda cid: [[{"text": "⏰ هشدار دوره‌ای", "callback_data": f"set_reminder:{cid}:{sym}"}]]
