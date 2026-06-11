@@ -2956,7 +2956,21 @@ def _do_update(upd, token):
                         threading.Thread(target=lambda: _rebuild_active_assign_count(
                             _sb_load_active_assignments()), daemon=True).start()
                         tag_txt = f" <b>{false_tag}</b>" if false_tag else ""
-                        send_tg(token, cid, f"✅ آلارم{tag_txt} غیرفعال شد — از لیست تریگر خارج شد.")
+                        # ارسال reply روی پیام اصلی برای همه چت‌ها
+                        false_broadcast = (
+                            f"❌ آلارم{tag_txt} از لیست تریگر خارج شد\n"
+                            f"👤 توسط: <b>{sender_name_false}</b>"
+                        )
+                        false_cid_map = _fired_msg_ids.get(target_aid_false, {})
+                        for tc, tm in false_cid_map.items():
+                            if tc in ("__tag__", "__text__"): continue
+                            try:
+                                requests.post(
+                                    f"https://api.telegram.org/bot{token}/sendMessage",
+                                    json={"chat_id": tc, "text": false_broadcast,
+                                          "parse_mode": "HTML", "reply_to_message_id": tm},
+                                    timeout=8, headers=H)
+                            except: pass
                     else:
                         send_tg(token, cid, "⚠️ روی پیام آلارم ریپلای بزن و /False بنویس.")
 
