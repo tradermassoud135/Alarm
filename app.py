@@ -2739,43 +2739,52 @@ def _do_update(upd, token):
                         answer_callback(token_cbq, cbq_id, "⏳ در حال بارگذاری...")
                         ta_parts = cbq_data.split(":")
                         ta_cid   = ta_parts[1]
-                        ta_mode  = ta_parts[2] if len(ta_parts) > 2 else "active"  # active | all
+                        ta_mode  = ta_parts[2] if len(ta_parts) > 2 else "active"
+                        # ابتدای هفته — شنبه تهران
+                        now_dt_ta = datetime.now(TEHRAN)
+                        days_since_sat = (now_dt_ta.weekday() - 5) % 7
+                        week_start_ta = (now_dt_ta - timedelta(days=days_since_sat)).replace(
+                            hour=0, minute=0, second=0, microsecond=0)
+                        week_start_str_ta = week_start_ta.strftime("%Y-%m-%dT%H:%M:%S")
                         rows_ta = []
                         if SUPABASE_KEY:
                             try:
                                 if ta_mode == "active":
                                     url_ta = (
                                         f"{SUPABASE_URL}/rest/v1/alarm_assignments"
-                                        f"?is_active=eq.true&select=*&order=fired_at.asc"
+                                        f"?fired_at=gte.{week_start_str_ta}&is_active=eq.true"
+                                        f"&select=*&order=fired_at.asc"
                                     )
                                 else:
                                     url_ta = (
                                         f"{SUPABASE_URL}/rest/v1/alarm_assignments"
-                                        f"?select=*&order=fired_at.desc"
+                                        f"?fired_at=gte.{week_start_str_ta}"
+                                        f"&select=*&order=fired_at.asc"
                                     )
                                 r_ta = requests.get(url_ta, headers=_sb_h(), timeout=10)
                                 if r_ta.status_code == 200:
                                     rows_ta = r_ta.json()
                             except Exception as e:
-                                print(f"[today] load exc: {e}")
+                                print(f"[weekly_list] load exc: {e}")
                         # فقط تیمی
                         all_alerts_ta = load_alerts().get("alarms", [])
                         private_ids_ta = {str(a["id"]) for a in all_alerts_ta if a.get("is_private")}
                         rows_ta = [r for r in rows_ta if str(r.get("id","")) not in private_ids_ta]
                         mode_label = "فعال" if ta_mode == "active" else "همه"
+                        week_label = week_start_ta.strftime("%d/%m")
                         if not rows_ta:
                             edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
-                                f"📋 <b>لیست آلارم‌های تیم ({mode_label})</b>\n\n📭 آلارمی پیدا نشد.",
+                                f"📋 <b>هفتگی ({mode_label}) از {week_label}</b>\n\n📭 آلارمی پیدا نشد.",
                                 [[{"text": "✅ فعال", "callback_data": f"today_alarms:{ta_cid}:active"},
                                   {"text": "📊 همه",  "callback_data": f"today_alarms:{ta_cid}:all"}],
                                  [{"text": "✕ بستن", "callback_data": f"today_alarms_close:{ta_cid}"}]])
                         else:
-                            lines_ta = [f"📋 <b>لیست آلارم‌های تیم ({mode_label}) — {len(rows_ta)}</b>", ""]
+                            lines_ta = [f"📋 <b>هفتگی ({mode_label}) از {week_label} — {len(rows_ta)} آلارم</b>", ""]
                             alerts_by_id_ta = {str(a["id"]): a for a in all_alerts_ta}
                             for row_ta in rows_ta:
                                 aid_ta      = str(row_ta.get("id",""))
                                 tag_ta      = row_ta.get("alarm_tag", "—")
-                                assignee_ta = row_ta.get("assigned_to", "") or "—"
+                                assignee_ta = row_ta.get("assigned_to", "") or "⏳ منتظر تقسیم"
                                 fired_ta    = row_ta.get("fired_at", "")[:16]
                                 is_act_ta   = row_ta.get("is_active", True)
                                 alert_ta    = alerts_by_id_ta.get(aid_ta, {})
@@ -3247,7 +3256,7 @@ def _do_update(upd, token):
                                       {"text": "📊 همه سیگنال‌ها", "callback_data": f"signals_view:{cid}:all"}])
                     status_kb.append([{"text": "🎯 لیست تریگر", "callback_data": f"trigger_list:{cid}"},
                                       {"text": "📋 گزارش هفتگی", "callback_data": f"weekly_report:{cid}"}])
-                    status_kb.append([{"text": "📋 لیست آلارم‌های تیم", "callback_data": f"today_alarms:{cid}:active"}])
+                    status_kb.append([{"text": "📋 لیست هفتگی", "callback_data": f"today_alarms:{cid}:active"}])
                     send_tg_keyboard(token, cid, status_text, status_kb)
 
                 elif txt == "⭐ آلارم‌های من":
