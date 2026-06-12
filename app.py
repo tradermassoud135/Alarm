@@ -2679,7 +2679,7 @@ def _do_update(upd, token):
                         rows_wr = [r for r in rows_wr if str(r.get("id","")) not in private_ids_wr]
                         if not rows_wr:
                             edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
-                                f"📋 <b>گزارش هفتگی</b>\n\n"
+                                f"📋 <b>گزارش هفتگی تیم</b>\n\n"
                                 f"از {week_start.strftime('%d/%m')} تا الان\n\n"
                                 f"📭 هیچ آلارم تیمی در این هفته ثبت نشده.",
                                 [[{"text": "✕ بستن", "callback_data": f"weekly_report_close:{cbq_cid}"}]])
@@ -2690,25 +2690,25 @@ def _do_update(upd, token):
                                 ""
                             ]
                             for row_wr in rows_wr:
-                                aid_wr      = str(row_wr.get("id", ""))
-                                tag_wr      = row_wr.get("alarm_tag", "—")
-                                assignee_wr = row_wr.get("assigned_to", "") or "—"
-                                fired_wr    = row_wr.get("fired_at", "")[:16]
-                                false_by_wr = row_wr.get("false_by", "") or ""
-                                false_at_wr = row_wr.get("false_at", "")[:16] if row_wr.get("false_at") else ""
-                                false_reason_wr = row_wr.get("false_reason", "") or ""
+                                aid_wr       = str(row_wr.get("id", ""))
+                                tag_wr       = row_wr.get("alarm_tag", "—")
+                                assignee_wr  = row_wr.get("assigned_to", "") or "—"
+                                fired_wr     = row_wr.get("fired_at", "")[:16]
+                                false_by_wr  = row_wr.get("false_by", "") or ""
+                                false_at_wr  = row_wr.get("false_at", "")[:16] if row_wr.get("false_at") else ""
+                                false_rsn_wr = row_wr.get("false_reason", "") or ""
                                 is_active_wr = row_wr.get("is_active", True)
-                                # اطلاعات آلارم اصلی
-                                alert_wr = alerts_by_id_wr.get(aid_wr, {})
-                                created_wr = str(alert_wr.get("created_at", ""))[:16]
-                                sym_wr = alert_wr.get("symbol", "") or tag_wr
-                                target_wr = alert_wr.get("target_price", "") or alert_wr.get("price", "")
-                                creator_wr = alert_wr.get("created_by", "") or "—"
-                                lines_wr.append(f"🔖 <b>{tag_wr}</b>  |  {sym_wr}")
+                                alert_wr     = alerts_by_id_wr.get(aid_wr, {})
+                                created_wr   = str(alert_wr.get("created_at", ""))[:16]
+                                sym_wr       = alert_wr.get("symbol", "")
+                                tgt_raw      = alert_wr.get("target_price", 0)
+                                target_wr    = fmt_price(float(tgt_raw), sym_wr) if tgt_raw else "—"
+                                creator_wr   = alert_wr.get("created_by", "") or "—"
+                                # خط اول: هشتگ شماره‌دار | نماد
+                                lines_wr.append(f"🔖 <b>{tag_wr}</b>  |  #{sym_wr}")
                                 if created_wr:
-                                    lines_wr.append(f"📅 ثبت آلارم: {created_wr}")
-                                if target_wr:
-                                    lines_wr.append(f"🎯 قیمت هدف: <code>{target_wr}</code>")
+                                    lines_wr.append(f"📅 ثبت: {created_wr}")
+                                lines_wr.append(f"🎯 هدف: <code>{target_wr}</code>")
                                 lines_wr.append(f"👤 سازنده: {creator_wr}")
                                 lines_wr.append(f"⏰ فایر شد: {fired_wr}")
                                 lines_wr.append(f"🙋 مسئول: {assignee_wr}")
@@ -2716,8 +2716,8 @@ def _do_update(upd, token):
                                     lines_wr.append(f"✅ وضعیت: فعال")
                                 else:
                                     lines_wr.append(f"❌ وضعیت: False — {false_by_wr}  |  {false_at_wr}")
-                                    if false_reason_wr:
-                                        lines_wr.append(f"📝 علت: {false_reason_wr}")
+                                    if false_rsn_wr:
+                                        lines_wr.append(f"📝 علت: {false_rsn_wr}")
                                 lines_wr.append("──────────────")
                             full_wr = "\n".join(lines_wr)
                             if len(full_wr) > 4000:
@@ -2734,6 +2734,45 @@ def _do_update(upd, token):
                                 json={"chat_id": cbq_cid, "message_id": cbq_msg_id},
                                 timeout=8, headers=H)
                         except: pass
+
+                    elif cbq_data.startswith("resend_active:"):
+                        answer_callback(token_cbq, cbq_id, "⏳ در حال ارسال...")
+                        ra_cid = cbq_data.split(":", 1)[1]
+                        rows_ra = _sb_load_pending_shifts(
+                            ["morning", "evening", "night", "morning_handover",
+                             "evening_handover", "weekend_pending"])
+                        # فقط تیمی
+                        all_alerts_ra = load_alerts().get("alarms", [])
+                        private_ids_ra = {str(a["id"]) for a in all_alerts_ra if a.get("is_private")}
+                        rows_ra = [r for r in rows_ra if str(r.get("id","")) not in private_ids_ra]
+                        if not rows_ra:
+                            send_tg(token_cbq, ra_cid, "📭 هیچ آلارم فعالی در لیست تریگر نیست.")
+                        else:
+                            send_tg(token_cbq, ra_cid,
+                                f"🔔 <b>{len(rows_ra)} آلارم فعال</b> — ریپلای زیر:")
+                            for row_ra in rows_ra:
+                                aid_ra = str(row_ra.get("id", ""))
+                                tag_ra = row_ra.get("alarm_tag", "—")
+                                assignee_ra = row_ra.get("assigned_to", "") or "⏳ منتظر تقسیم"
+                                # پیدا کردن message_id اصلی برای این کاربر
+                                cid_map_ra = _fired_msg_ids.get(aid_ra, {})
+                                orig_mid = cid_map_ra.get(ra_cid)
+                                orig_text = cid_map_ra.get("__text__", "")
+                                if orig_mid:
+                                    # ریپلای روی همون پیام اصلی
+                                    try:
+                                        requests.post(
+                                            f"https://api.telegram.org/bot{token_cbq}/sendMessage",
+                                            json={"chat_id": ra_cid,
+                                                  "text": f"🔔 <b>{tag_ra}</b>\n👤 مسئول: {assignee_ra}",
+                                                  "parse_mode": "HTML",
+                                                  "reply_to_message_id": orig_mid},
+                                            timeout=8, headers=H)
+                                    except: pass
+                                else:
+                                    # پیام اصلی پیدا نشد — متن خلاصه بفرست
+                                    send_tg(token_cbq, ra_cid,
+                                        f"🔔 <b>{tag_ra}</b>\n👤 مسئول: {assignee_ra}")
 
                     elif cbq_data.startswith("today_alarms:"):
                         answer_callback(token_cbq, cbq_id, "⏳ در حال بارگذاری...")
@@ -3256,6 +3295,7 @@ def _do_update(upd, token):
                                       {"text": "📊 همه سیگنال‌ها", "callback_data": f"signals_view:{cid}:all"}])
                     status_kb.append([{"text": "🎯 لیست تریگر", "callback_data": f"trigger_list:{cid}"},
                                       {"text": "📋 گزارش هفتگی", "callback_data": f"weekly_report:{cid}"}])
+                    status_kb.append([{"text": "🔔 نمایش آلارم‌های فعال", "callback_data": f"resend_active:{cid}"}])
                     send_tg_keyboard(token, cid, status_text, status_kb)
 
                 elif txt == "⭐ آلارم‌های من":
