@@ -2739,19 +2739,20 @@ def _do_update(upd, token):
                         answer_callback(token_cbq, cbq_id, "⏳ در حال بارگذاری...")
                         ta_parts = cbq_data.split(":")
                         ta_cid   = ta_parts[1]
-                        ta_mode  = ta_parts[2] if len(ta_parts) > 2 else "all"  # all | active
-                        now_dt_ta = datetime.now(TEHRAN)
-                        today_start = now_dt_ta.replace(hour=0, minute=0, second=0, microsecond=0)
-                        today_start_str = today_start.strftime("%Y-%m-%dT%H:%M:%S")
+                        ta_mode  = ta_parts[2] if len(ta_parts) > 2 else "active"  # active | all
                         rows_ta = []
                         if SUPABASE_KEY:
                             try:
-                                url_ta = (
-                                    f"{SUPABASE_URL}/rest/v1/alarm_assignments"
-                                    f"?fired_at=gte.{today_start_str}&select=*&order=fired_at.asc"
-                                )
                                 if ta_mode == "active":
-                                    url_ta += "&is_active=eq.true"
+                                    url_ta = (
+                                        f"{SUPABASE_URL}/rest/v1/alarm_assignments"
+                                        f"?is_active=eq.true&select=*&order=fired_at.asc"
+                                    )
+                                else:
+                                    url_ta = (
+                                        f"{SUPABASE_URL}/rest/v1/alarm_assignments"
+                                        f"?select=*&order=fired_at.desc"
+                                    )
                                 r_ta = requests.get(url_ta, headers=_sb_h(), timeout=10)
                                 if r_ta.status_code == 200:
                                     rows_ta = r_ta.json()
@@ -2764,18 +2765,18 @@ def _do_update(upd, token):
                         mode_label = "فعال" if ta_mode == "active" else "همه"
                         if not rows_ta:
                             edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
-                                f"📅 <b>آلارم‌های امروز ({mode_label})</b>\n\n📭 آلارم تیمی امروز نداریم.",
-                                [[{"text": "همه", "callback_data": f"today_alarms:{ta_cid}:all"},
-                                  {"text": "فعال", "callback_data": f"today_alarms:{ta_cid}:active"}],
+                                f"📋 <b>لیست آلارم‌های تیم ({mode_label})</b>\n\n📭 آلارمی پیدا نشد.",
+                                [[{"text": "✅ فعال", "callback_data": f"today_alarms:{ta_cid}:active"},
+                                  {"text": "📊 همه",  "callback_data": f"today_alarms:{ta_cid}:all"}],
                                  [{"text": "✕ بستن", "callback_data": f"today_alarms_close:{ta_cid}"}]])
                         else:
-                            lines_ta = [f"📅 <b>آلارم‌های امروز ({mode_label}) — {len(rows_ta)} آلارم</b>", ""]
+                            lines_ta = [f"📋 <b>لیست آلارم‌های تیم ({mode_label}) — {len(rows_ta)}</b>", ""]
                             alerts_by_id_ta = {str(a["id"]): a for a in all_alerts_ta}
                             for row_ta in rows_ta:
                                 aid_ta      = str(row_ta.get("id",""))
                                 tag_ta      = row_ta.get("alarm_tag", "—")
                                 assignee_ta = row_ta.get("assigned_to", "") or "—"
-                                fired_ta    = row_ta.get("fired_at", "")[11:16]
+                                fired_ta    = row_ta.get("fired_at", "")[:16]
                                 is_act_ta   = row_ta.get("is_active", True)
                                 alert_ta    = alerts_by_id_ta.get(aid_ta, {})
                                 sym_ta      = alert_ta.get("symbol", "")
@@ -2790,8 +2791,8 @@ def _do_update(upd, token):
                             if len(full_ta) > 4000:
                                 full_ta = full_ta[:3980] + "\n<i>...</i>"
                             kb_ta = [
-                                [{"text": "📊 همه",  "callback_data": f"today_alarms:{ta_cid}:all"},
-                                 {"text": "✅ فعال", "callback_data": f"today_alarms:{ta_cid}:active"}],
+                                [{"text": "✅ فعال", "callback_data": f"today_alarms:{ta_cid}:active"},
+                                 {"text": "📊 همه",  "callback_data": f"today_alarms:{ta_cid}:all"}],
                                 [{"text": "🔄 بروزرسانی", "callback_data": f"today_alarms:{ta_cid}:{ta_mode}"},
                                  {"text": "✕ بستن",        "callback_data": f"today_alarms_close:{ta_cid}"}]
                             ]
@@ -3246,7 +3247,7 @@ def _do_update(upd, token):
                                       {"text": "📊 همه سیگنال‌ها", "callback_data": f"signals_view:{cid}:all"}])
                     status_kb.append([{"text": "🎯 لیست تریگر", "callback_data": f"trigger_list:{cid}"},
                                       {"text": "📋 گزارش هفتگی", "callback_data": f"weekly_report:{cid}"}])
-                    status_kb.append([{"text": "📅 آلارم‌های امروز", "callback_data": f"today_alarms:{cid}:all"}])
+                    status_kb.append([{"text": "📋 لیست آلارم‌های تیم", "callback_data": f"today_alarms:{cid}:active"}])
                     send_tg_keyboard(token, cid, status_text, status_kb)
 
                 elif txt == "⭐ آلارم‌های من":
