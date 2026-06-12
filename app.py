@@ -2606,8 +2606,9 @@ def _do_update(upd, token):
                         answer_callback(token_cbq, cbq_id, "⏳ در حال بارگذاری...")
                         tl_cid = cbq_data.split(":", 1)[1]
                         rows_tl_all = _sb_load_active_assignments()
-                        # فقط آلارم‌های تیمی — شخصی فیلتر بشه
-                        all_alerts_tl = load_alerts().get("alarms", [])
+                        # فقط آلارم‌های تیمی — بدون کش
+                        _raw_tl = _sb_load_all_alerts()
+                        all_alerts_tl = _raw_tl.get("alarms", []) if _raw_tl and isinstance(_raw_tl, dict) else load_alerts().get("alarms", [])
                         private_ids = {str(a["id"]) for a in all_alerts_tl if a.get("is_private")}
                         rows_tl = [r for r in rows_tl_all if str(r.get("id","")) not in private_ids]
                         my_name_tl = _get_user_custom_name(tl_cid) or ""
@@ -2672,8 +2673,12 @@ def _do_update(upd, token):
                                     rows_wr = r_wr.json()
                             except Exception as e:
                                 print(f"[weekly] load exc: {e}")
-                        # فقط آلارم‌های تیمی
-                        all_alerts_wr = load_alerts().get("alarms", [])
+                        # لود همه آلارم‌ها بدون کش — شامل fired شده‌ها هم بشه
+                        _raw_wr = _sb_load_all_alerts()
+                        if _raw_wr and isinstance(_raw_wr, dict):
+                            all_alerts_wr = _raw_wr.get("alarms", [])
+                        else:
+                            all_alerts_wr = load_alerts().get("alarms", [])
                         private_ids_wr = {str(a["id"]) for a in all_alerts_wr if a.get("is_private")}
                         alerts_by_id_wr = {str(a["id"]): a for a in all_alerts_wr}
                         rows_wr = [r for r in rows_wr if str(r.get("id","")) not in private_ids_wr]
