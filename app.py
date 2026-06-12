@@ -3205,8 +3205,6 @@ def _do_update(upd, token):
                         threading.Thread(target=_sb_delete_fired_msgs, args=(target_aid,), daemon=True).start()
                         # حذف خود آلارم از Supabase — تا دیگه fire نشه
                         threading.Thread(target=_sb_delete_alert, args=(target_aid,), daemon=True).start()
-                        # آپدیت cache
-                        global _cache_alerts
                         _cache_alerts = None
                         send_tg(token, cid, f"🗑 پیام آلارم از <b>{deleted_count}</b> چت پاک شد.")
 
