@@ -222,6 +222,7 @@ def load_alerts():
 
 def _sb_delete_alert(aid):
     """یه آلارم رو از Supabase حذف کن"""
+    _deleted_ids.add(str(aid))  # فوری به blacklist اضافه کن
     if not SUPABASE_KEY: return
     try:
         r = requests.delete(
@@ -684,7 +685,8 @@ _active_assign_count: dict = {}
 
 # ─── Supabase helpers ────────────────────────────────────────────────
 
-def _sb_save_assignment(alarm_id: str, alarm_tag: str, assignee: str, shift: str, fired_at: str):
+def _sb_save_assignment(alarm_id: str, alarm_tag: str, assignee: str, shift: str, fired_at: str,
+                        symbol: str = "", target_price: float = 0, created_by: str = ""):
     """ذخیره/آپدیت assignment در Supabase"""
     if not SUPABASE_KEY: return
     try:
@@ -696,7 +698,10 @@ def _sb_save_assignment(alarm_id: str, alarm_tag: str, assignee: str, shift: str
             "is_active": True,
             "fired_at": fired_at,
             "false_at": None,
-            "false_by": None
+            "false_by": None,
+            "symbol": symbol,
+            "target_price": target_price,
+            "created_by": created_by
         }
         r = requests.post(
             f"{SUPABASE_URL}/rest/v1/alarm_assignments",
@@ -791,7 +796,8 @@ def _pick_assignee(members: list) -> str:
     _active_assign_count[chosen] = _active_assign_count.get(chosen, 0) + 1
     return chosen
 
-def _get_assignee_for_alarm(alarm_id: str, alarm_tag: str, fired_at: str) -> tuple:
+def _get_assignee_for_alarm(alarm_id: str, alarm_tag: str, fired_at: str,
+                            symbol: str = "", target_price: float = 0, created_by: str = "") -> tuple:
     """
     مسئول آلارم رو تعیین کن.
     شب / شنبه / یکشنبه → ("", "night")  بدون مسئول
@@ -799,10 +805,10 @@ def _get_assignee_for_alarm(alarm_id: str, alarm_tag: str, fired_at: str) -> tup
     shift = _get_current_shift()
     members = _get_shift_members(shift)
     if not members:
-        # ذخیره در Supabase بدون assignee
         threading.Thread(
             target=_sb_save_assignment,
             args=(alarm_id, alarm_tag, "", "night", fired_at),
+            kwargs={"symbol": symbol, "target_price": target_price, "created_by": created_by},
             daemon=True
         ).start()
         return ("", "night")
@@ -810,6 +816,7 @@ def _get_assignee_for_alarm(alarm_id: str, alarm_tag: str, fired_at: str) -> tup
     threading.Thread(
         target=_sb_save_assignment,
         args=(alarm_id, alarm_tag, assignee, shift, fired_at),
+        kwargs={"symbol": symbol, "target_price": target_price, "created_by": created_by},
         daemon=True
     ).start()
     return (assignee, shift)
@@ -2606,9 +2613,13 @@ def _do_update(upd, token):
                         answer_callback(token_cbq, cbq_id, "⏳ در حال بارگذاری...")
                         tl_cid = cbq_data.split(":", 1)[1]
                         rows_tl_all = _sb_load_active_assignments()
-                        # فقط آلارم‌های تیمی — بدون کش
+                        # فقط آلارم‌های تیمی — active + archive بدون کش
                         _raw_tl = _sb_load_all_alerts()
-                        all_alerts_tl = _raw_tl.get("alarms", []) if _raw_tl and isinstance(_raw_tl, dict) else load_alerts().get("alarms", [])
+                        if _raw_tl and isinstance(_raw_tl, dict):
+                            all_alerts_tl = _raw_tl.get("alarms", []) + _raw_tl.get("archive", [])
+                        else:
+                            _fb_tl = load_alerts()
+                            all_alerts_tl = _fb_tl.get("alarms", []) + _fb_tl.get("archive", [])
                         private_ids = {str(a["id"]) for a in all_alerts_tl if a.get("is_private")}
                         rows_tl = [r for r in rows_tl_all if str(r.get("id","")) not in private_ids]
                         my_name_tl = _get_user_custom_name(tl_cid) or ""
@@ -2673,12 +2684,13 @@ def _do_update(upd, token):
                                     rows_wr = r_wr.json()
                             except Exception as e:
                                 print(f"[weekly] load exc: {e}")
-                        # لود همه آلارم‌ها بدون کش — شامل fired شده‌ها هم بشه
+                        # لود همه آلارم‌ها — active + archive (fired شده‌ها)
                         _raw_wr = _sb_load_all_alerts()
                         if _raw_wr and isinstance(_raw_wr, dict):
-                            all_alerts_wr = _raw_wr.get("alarms", [])
+                            all_alerts_wr = _raw_wr.get("alarms", []) + _raw_wr.get("archive", [])
                         else:
-                            all_alerts_wr = load_alerts().get("alarms", [])
+                            _fb = load_alerts()
+                            all_alerts_wr = _fb.get("alarms", []) + _fb.get("archive", [])
                         private_ids_wr = {str(a["id"]) for a in all_alerts_wr if a.get("is_private")}
                         alerts_by_id_wr = {str(a["id"]): a for a in all_alerts_wr}
                         rows_wr = [r for r in rows_wr if str(r.get("id","")) not in private_ids_wr]
@@ -2703,13 +2715,13 @@ def _do_update(upd, token):
                                 false_at_wr  = row_wr.get("false_at", "")[:16] if row_wr.get("false_at") else ""
                                 false_rsn_wr = row_wr.get("false_reason", "") or ""
                                 is_active_wr = row_wr.get("is_active", True)
-                                alert_wr     = alerts_by_id_wr.get(aid_wr, {})
-                                created_wr   = str(alert_wr.get("created_at", ""))[:16]
-                                sym_wr       = alert_wr.get("symbol", "")
-                                tgt_raw      = alert_wr.get("target_price", 0)
-                                target_wr    = fmt_price(float(tgt_raw), sym_wr) if tgt_raw else "—"
-                                creator_wr   = alert_wr.get("created_by", "") or "—"
-                                # خط اول: هشتگ شماره‌دار | نماد
+                                # اطلاعات اصلی از alerts جدول
+                                alert_wr   = alerts_by_id_wr.get(aid_wr, {})
+                                sym_wr     = alert_wr.get("symbol", "") or ""
+                                tgt_raw    = alert_wr.get("target_price", 0) or 0
+                                target_wr  = fmt_price(float(tgt_raw), sym_wr) if tgt_raw else "—"
+                                creator_wr = alert_wr.get("created_by", "") or "—"
+                                created_wr = str(alert_wr.get("created_at", ""))[:16]
                                 lines_wr.append(f"🔖 <b>{tag_wr}</b>  |  #{sym_wr}")
                                 if created_wr:
                                     lines_wr.append(f"📅 ثبت: {created_wr}")
@@ -3189,7 +3201,13 @@ def _do_update(upd, token):
                                 if r_del.status_code == 200:
                                     deleted_count += 1
                             except: pass
+                        # حذف پیام fired از Supabase
                         threading.Thread(target=_sb_delete_fired_msgs, args=(target_aid,), daemon=True).start()
+                        # حذف خود آلارم از Supabase — تا دیگه fire نشه
+                        threading.Thread(target=_sb_delete_alert, args=(target_aid,), daemon=True).start()
+                        # آپدیت cache
+                        global _cache_alerts
+                        _cache_alerts = None
                         send_tg(token, cid, f"🗑 پیام آلارم از <b>{deleted_count}</b> چت پاک شد.")
 
                 # ── /false — آلارم منقضی/ترید شده، از لیست تریگر خارج بشه ──
@@ -3897,6 +3915,7 @@ def _do_update(upd, token):
     print(f"[do_update] {e}")
 
 notified = set()
+_deleted_ids: set = set()  # آلارم‌هایی که پاک شدن — دیگه fire نشن
 _loop_count = 0
 
 _price_fetch_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="price_fetch")
@@ -3923,7 +3942,7 @@ def check_alerts():
             global _cache_alerts
             _cache_alerts = None
             token, cids, data = _get_token_and_cids()
-            active = [a for a in data.get("alerts", []) if a.get("active")]
+            active = [a for a in data.get("alerts", []) if a.get("active") and str(a["id"]) not in _deleted_ids]
             if not active:
                 save_alerts(data)
                 time.sleep(60)
@@ -3983,7 +4002,7 @@ def check_alerts():
                 data["last_update"] = now
                 triggered = (cond == "above" and cur >= tgt) or (cond == "below" and cur <= tgt)
                 print(f"[check] {sym} cur={fmt_price(cur,sym)} tgt={fmt_price(tgt,sym)} cond={cond} → {'🔥 FIRE' if triggered else 'ok'}")
-                if triggered and a["id"] not in notified:
+                if triggered and a["id"] not in notified and str(a["id"]) not in _deleted_ids:
                     notified.add(a["id"])
                     a["active"] = False
                     a["fired_at"] = now
@@ -4008,7 +4027,10 @@ def check_alerts():
                         alarm_num_tag = _make_alarm_tag(sym)
                         creator_tag = "#" + re.sub(r'[^\w]', '_', creator).strip('_')
                         # ── تعیین مسئول تریگر ──────────────────────────
-                        _assignee, _shift = _get_assignee_for_alarm(a["id"], alarm_num_tag, now)
+                        _assignee, _shift = _get_assignee_for_alarm(
+                            a["id"], alarm_num_tag, now,
+                            symbol=sym, target_price=float(tgt), created_by=creator
+                        )
                         if _assignee:
                             assignee_line = f"\n\n🎯 مسئول تریگر: <b>{_assignee}</b>"
                         else:
@@ -4903,6 +4925,79 @@ def weekly_review():
     days_since_monday = now.weekday()
     week_start = (now - _td(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
     week_end = week_start + _td(days=6, hours=23, minutes=59)
+
+@app.route("/api/assignments", methods=["GET"])
+def api_assignments():
+    """
+    لیست کامل assignments با join از alerts جدول.
+    پارامترها:
+      ?active=true    — فقط فعال‌ها
+      ?week=true      — از ابتدای هفته جاری (شنبه تهران)
+      ?all=true       — همه (پیش‌فرض)
+    """
+    try:
+        active_only = request.args.get("active") == "true"
+        week_only   = request.args.get("week") == "true"
+
+        # لود assignments از Supabase
+        url = f"{SUPABASE_URL}/rest/v1/alarm_assignments?select=*&order=fired_at.desc"
+        if active_only:
+            url += "&is_active=eq.true"
+        if week_only:
+            now_dt = datetime.now(TEHRAN)
+            days_since_sat = (now_dt.weekday() - 5) % 7
+            week_start = (now_dt - timedelta(days=days_since_sat)).replace(
+                hour=0, minute=0, second=0, microsecond=0)
+            url += f"&fired_at=gte.{week_start.strftime('%Y-%m-%dT%H:%M:%S')}"
+
+        r = requests.get(url, headers=_sb_h(), timeout=10)
+        if r.status_code != 200:
+            return jsonify({"ok": False, "error": r.text[:100]}), 500
+        rows = r.json()
+
+        # لود همه alerts (active + archive) برای join
+        raw = _sb_load_all_alerts()
+        if raw and isinstance(raw, dict):
+            all_alerts = raw.get("alarms", []) + raw.get("archive", [])
+        else:
+            fb = load_alerts()
+            all_alerts = fb.get("alarms", []) + fb.get("archive", [])
+        alerts_map = {str(a["id"]): a for a in all_alerts}
+
+        result = []
+        for row in rows:
+            aid    = str(row.get("id", ""))
+            alert  = alerts_map.get(aid, {})
+            sym    = alert.get("symbol", "")
+            tgt    = alert.get("target_price", 0) or 0
+            result.append({
+                # از alarm_assignments
+                "id":           aid,
+                "alarm_tag":    row.get("alarm_tag", ""),
+                "assigned_to":  row.get("assigned_to", "") or "",
+                "shift":        row.get("shift", ""),
+                "is_active":    row.get("is_active", True),
+                "fired_at":     row.get("fired_at", ""),
+                "false_at":     row.get("false_at", "") or "",
+                "false_by":     row.get("false_by", "") or "",
+                "false_reason": row.get("false_reason", "") or "",
+                # از alerts جدول
+                "symbol":       sym,
+                "condition":    alert.get("condition", ""),
+                "target_price": tgt,
+                "target_fmt":   fmt_price(float(tgt), sym) if tgt else "",
+                "created_by":   alert.get("created_by", "") or "",
+                "created_at":   alert.get("created_at", "") or "",
+                "comment":      alert.get("comment", "") or "",
+                "fired_price":  alert.get("fired_price", "") or "",
+                "is_private":   alert.get("is_private", False),
+            })
+
+        # فیلتر آلارم‌های شخصی
+        result = [r for r in result if not r["is_private"]]
+        return jsonify({"ok": True, "count": len(result), "items": result})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
     journal = load_journal()
     week_trades = []
