@@ -3256,7 +3256,6 @@ def _do_update(upd, token):
                                       {"text": "📊 همه سیگنال‌ها", "callback_data": f"signals_view:{cid}:all"}])
                     status_kb.append([{"text": "🎯 لیست تریگر", "callback_data": f"trigger_list:{cid}"},
                                       {"text": "📋 گزارش هفتگی", "callback_data": f"weekly_report:{cid}"}])
-                    status_kb.append([{"text": "📋 لیست هفتگی", "callback_data": f"today_alarms:{cid}:active"}])
                     send_tg_keyboard(token, cid, status_text, status_kb)
 
                 elif txt == "⭐ آلارم‌های من":
