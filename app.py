@@ -883,21 +883,21 @@ def _assignment_scheduler():
             # ۸ صبح روزهای کاری (دوشنبه تا جمعه)
             for d in range(7):
                 t = now_dt.replace(hour=8, minute=0, second=0, microsecond=0) + timedelta(days=d)
-                if t > now_dt and t.weekday() not in (5, 6):
+                if t >= now_dt and t.weekday() not in (5, 6):
                     candidates.append(("8am", t))
                     break
 
             # ۱۶ روزهای کاری
             for d in range(7):
                 t = now_dt.replace(hour=16, minute=0, second=0, microsecond=0) + timedelta(days=d)
-                if t > now_dt and t.weekday() not in (5, 6):
+                if t >= now_dt and t.weekday() not in (5, 6):
                     candidates.append(("16", t))
                     break
 
             # ۲۰ روزهای کاری
             for d in range(7):
                 t = now_dt.replace(hour=20, minute=0, second=0, microsecond=0) + timedelta(days=d)
-                if t > now_dt and t.weekday() not in (5, 6):
+                if t >= now_dt and t.weekday() not in (5, 6):
                     candidates.append(("20", t))
                     break
 
@@ -909,7 +909,20 @@ def _assignment_scheduler():
             event_name, target_dt = min(candidates, key=lambda x: x[1])
             wait_sec = (target_dt - now_dt).total_seconds()
             print(f"[assign] scheduler: {event_name} — {wait_sec/3600:.1f} ساعت دیگه ({target_dt.strftime('%a %H:%M')})")
-            time.sleep(wait_sec)
+            time.sleep(max(wait_sec, 0))
+
+            # ── بررسی missed event بعد از restart (grace window 10 دقیقه) ──
+            # اگه سرور restart شده و event در ۱۰ دقیقه گذشته miss شده، همین الان اجرا کن
+            _GRACE_SEC = 600
+            now_after_sleep = datetime.now(TEHRAN)
+            if now_after_sleep.weekday() not in (5, 6):
+                for _mh, _me in [(8, "8am"), (16, "16"), (20, "20")]:
+                    _mt = now_after_sleep.replace(hour=_mh, minute=0, second=0, microsecond=0)
+                    _diff = (now_after_sleep - _mt).total_seconds()
+                    if 0 < _diff <= _GRACE_SEC and event_name != _me:
+                        print(f"[assign] ⚠️ event {_me} در {_diff:.0f} ثانیه پیش miss شده — اجرای فوری")
+                        event_name = _me
+                        break
 
             # ── اجرای event ────────────────────────────────────────
             if event_name == "8am":
