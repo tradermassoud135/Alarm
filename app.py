@@ -2777,27 +2777,26 @@ def _do_update(upd, token):
                         wr_page = max(0, min(wr_page, total_pages - 1))
                         page_rows = rows_wr[wr_page * PER_PAGE:(wr_page + 1) * PER_PAGE]
 
-                        # دکمه‌های ناوبری
-                        nav_row = []
-                        if wr_which == "last":
-                            nav_row.append({"text": "📅 این هفته", "callback_data": f"weekly_report:{cbq_cid_wr}:this:0"})
-                            nav_row.append({"text": "📅 هفته قبل ✓", "callback_data": f"weekly_report:{cbq_cid_wr}:last:0"})
-                        else:
-                            nav_row.append({"text": "📅 این هفته ✓", "callback_data": f"weekly_report:{cbq_cid_wr}:this:0"})
-                            nav_row.append({"text": "📅 هفته قبل", "callback_data": f"weekly_report:{cbq_cid_wr}:last:0"})
-                        page_row = []
-                        if wr_page > 0:
-                            page_row.append({"text": "‹ قبلی", "callback_data": f"weekly_report:{cbq_cid_wr}:{wr_which}:{wr_page-1}"})
-                        page_row.append({"text": f"صفحه {wr_page+1}/{total_pages}", "callback_data": "noop"})
-                        if wr_page < total_pages - 1:
-                            page_row.append({"text": "بعدی ›", "callback_data": f"weekly_report:{cbq_cid_wr}:{wr_which}:{wr_page+1}"})
+                        # دکمه‌های ناوبری — فقط صفحه اول انتخاب هفته داره
+                        kb_wr_nav = []
+                        if wr_page == 0:
+                            nav_row = [
+                                {"text": "📅 این هفته" + (" ✓" if wr_which=="this" else ""), "callback_data": f"weekly_report:{cbq_cid_wr}:this:0"},
+                                {"text": "📅 هفته قبل" + (" ✓" if wr_which=="last" else ""), "callback_data": f"weekly_report:{cbq_cid_wr}:last:0"}
+                            ]
+                            kb_wr_nav.append(nav_row)
+                        if total_pages > 1:
+                            page_row = []
+                            if wr_page > 0:
+                                page_row.append({"text": "‹ قبلی", "callback_data": f"weekly_report:{cbq_cid_wr}:{wr_which}:{wr_page-1}"})
+                            page_row.append({"text": f"صفحه {wr_page+1}/{total_pages}", "callback_data": "noop"})
+                            if wr_page < total_pages - 1:
+                                page_row.append({"text": "بعدی ›", "callback_data": f"weekly_report:{cbq_cid_wr}:{wr_which}:{wr_page+1}"})
+                            kb_wr_nav.append(page_row)
                         action_row = [
-                            {"text": "🔄 بروزرسانی", "callback_data": f"weekly_report:{cbq_cid_wr}:{wr_which}:{wr_page}"},
+                            {"text": "🔄", "callback_data": f"weekly_report:{cbq_cid_wr}:{wr_which}:{wr_page}"},
                             {"text": "✕ بستن", "callback_data": f"weekly_report_close:{cbq_cid_wr}"}
                         ]
-                        kb_wr_nav = [nav_row]
-                        if total_pages > 1:
-                            kb_wr_nav.append(page_row)
                         kb_wr_nav.append(action_row)
                         if APP_BASE_URL:
                             kb_wr_nav.append([{"text": "🌐 نسخه وب", "url": f"{APP_BASE_URL}/report/weekly?w={wr_which}"}])
@@ -6942,65 +6941,120 @@ def report_weekly_html():
         creator   = alert.get("created_by","") or row.get("created_by","") or "—"
         created   = str(alert.get("created_at",""))[:16]
         status_cls = "active" if is_active else "false"
-        status_txt = "✅ فعال" if is_active else f"❌ False — {false_by}"
-        false_row = f'<div class="false-detail">🕐 {false_at}{"  |  📝 "+false_rsn if false_rsn else ""}</div>' if not is_active and false_at else ""
+        status_txt = "فعال" if is_active else f"False — {false_by}"
+        false_detail = ""
+        if not is_active:
+            false_detail = f'<div class="false-detail"><span>🕐 {false_at}</span>{("<span class=reason>"+false_rsn+"</span>") if false_rsn else ""}</div>'
         rows_html += f"""
-        <div class="card {'card-active' if is_active else 'card-false'}">
+        <div class="card card-{status_cls}" onclick="this.classList.toggle('open')">
           <div class="card-header">
-            <span class="tag">{tag}</span><span class="sym">#{sym}</span>
-            <span class="status {status_cls}">{status_txt}</span>
+            <div class="card-title">
+              <span class="tag">{tag}</span>
+              <span class="sym">{sym}</span>
+            </div>
+            <span class="badge badge-{status_cls}">{status_txt}</span>
           </div>
           <div class="card-body">
-            <div class="info-grid">
-              <div class="info-item"><span class="lbl">📅 ثبت</span><span class="val">{created}</span></div>
-              <div class="info-item"><span class="lbl">🎯 هدف</span><span class="val mono">{target}</span></div>
-              <div class="info-item"><span class="lbl">👤 سازنده</span><span class="val">{creator}</span></div>
-              <div class="info-item"><span class="lbl">⏰ فایر شد</span><span class="val">{fired}</span></div>
-              <div class="info-item"><span class="lbl">🙋 مسئول</span><span class="val">{assignee}</span></div>
-            </div>{false_row}
+            <div class="row-info"><span class="lbl">📅 ثبت آلارم</span><span class="val">{created}</span></div>
+            <div class="row-info"><span class="lbl">⏰ فایر شد</span><span class="val">{fired}</span></div>
+            <div class="row-info"><span class="lbl">🎯 قیمت هدف</span><span class="val mono">{target}</span></div>
+            <div class="row-info"><span class="lbl">👤 سازنده</span><span class="val">{creator}</span></div>
+            <div class="row-info"><span class="lbl">🙋 مسئول تریگر</span><span class="val highlight">{assignee}</span></div>
+            {false_detail}
           </div>
         </div>"""
+
+    active_count = sum(1 for r in rows if r.get("is_active"))
+    false_count  = len(rows) - active_count
     html = f"""<!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>گزارش هفتگی تیم</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>گزارش هفتگی تیم — {week_label}</title>
 <style>
-*{{box-sizing:border-box;margin:0;padding:0}}
-body{{font-family:Tahoma,Arial,sans-serif;background:#0f1117;color:#e0e0e0;padding:16px;direction:rtl}}
-.header{{text-align:center;padding:20px 0 24px}}
-.header h1{{font-size:20px;color:#fff;margin-bottom:6px}}
-.sub{{font-size:13px;color:#888}}
-.week-nav{{display:flex;gap:10px;justify-content:center;margin-bottom:20px}}
-.week-btn{{padding:8px 20px;border-radius:8px;border:1px solid #333;background:#1a1d27;color:#aaa;text-decoration:none;font-size:13px}}
-.week-btn.active{{background:#2563eb;border-color:#2563eb;color:#fff}}
-.count{{text-align:center;font-size:13px;color:#666;margin-bottom:16px}}
-.card{{border-radius:12px;padding:14px;margin-bottom:12px;border:1px solid #222}}
-.card-active{{background:#111827;border-color:#1e3a5f}}
-.card-false{{background:#120c0c;border-color:#3a1515;opacity:.85}}
-.card-header{{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}}
-.tag{{font-weight:bold;font-size:15px;color:#60a5fa}}
-.sym{{font-size:13px;color:#666}}
-.status{{font-size:12px;padding:3px 10px;border-radius:20px;margin-right:auto}}
-.status.active{{background:#052e16;color:#4ade80}}
-.status.false{{background:#2d0a0a;color:#f87171}}
-.info-grid{{display:grid;grid-template-columns:1fr 1fr;gap:8px}}
-.info-item{{display:flex;flex-direction:column;gap:2px}}
-.lbl{{font-size:11px;color:#555}}
-.val{{font-size:13px;color:#ccc}}
-.mono{{font-family:monospace;color:#fbbf24}}
-.false-detail{{font-size:12px;color:#888;margin-top:10px;padding-top:10px;border-top:1px solid #2a1a1a}}
-.empty{{text-align:center;padding:60px 0;color:#444;font-size:14px}}
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+  *{{box-sizing:border-box;margin:0;padding:0}}
+  :root{{
+    --bg:#080c14;--surface:#0d1424;--surface2:#111827;
+    --border:#1e293b;--border2:#243044;
+    --text:#e2e8f0;--muted:#64748b;--subtle:#334155;
+    --blue:#3b82f6;--blue-dim:#1e3a5f;
+    --green:#22c55e;--green-dim:#052e16;--green-border:#166534;
+    --red:#ef4444;--red-dim:#1c0a0a;--red-border:#7f1d1d;
+    --gold:#f59e0b;
+  }}
+  body{{font-family:'Inter',Tahoma,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;direction:rtl}}
+  
+  /* ── Header ── */
+  .hero{{background:linear-gradient(135deg,#0f1f3d 0%,#0a0f1e 100%);padding:32px 20px 24px;text-align:center;border-bottom:1px solid var(--border);position:relative;overflow:hidden}}
+  .hero::before{{content:'';position:absolute;inset:0;background:radial-gradient(ellipse at 50% 0%,rgba(59,130,246,.15) 0%,transparent 70%);pointer-events:none}}
+  .hero h1{{font-size:22px;font-weight:700;color:#fff;margin-bottom:6px;letter-spacing:-.3px}}
+  .hero .period{{font-size:13px;color:var(--muted);margin-bottom:20px}}
+  
+  /* ── Stats bar ── */
+  .stats{{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}}
+  .stat{{background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:10px;padding:8px 18px;text-align:center}}
+  .stat .num{{font-size:20px;font-weight:700;color:#fff}}
+  .stat .lbl2{{font-size:11px;color:var(--muted);margin-top:2px}}
+  .stat.green .num{{color:var(--green)}}
+  .stat.red .num{{color:var(--red)}}
+
+  /* ── Week nav ── */
+  .week-nav{{display:flex;gap:8px;justify-content:center;padding:16px 20px;background:var(--surface);border-bottom:1px solid var(--border)}}
+  .week-btn{{padding:8px 22px;border-radius:8px;border:1px solid var(--border2);background:transparent;color:var(--muted);text-decoration:none;font-size:13px;font-weight:500;transition:.2s}}
+  .week-btn:hover{{border-color:var(--blue);color:var(--blue)}}
+  .week-btn.active{{background:var(--blue);border-color:var(--blue);color:#fff}}
+
+  /* ── Cards ── */
+  .list{{padding:16px 20px;max-width:640px;margin:0 auto}}
+  .card{{border-radius:14px;border:1px solid var(--border);margin-bottom:12px;overflow:hidden;transition:.2s;cursor:pointer}}
+  .card:hover{{border-color:var(--border2);transform:translateY(-1px)}}
+  .card-active{{background:var(--surface2);border-color:var(--blue-dim)}}
+  .card-false{{background:var(--red-dim);border-color:var(--red-border);opacity:.8}}
+  .card-header{{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;gap:10px}}
+  .card-title{{display:flex;align-items:center;gap:10px}}
+  .tag{{font-weight:700;font-size:15px;color:var(--blue)}}
+  .sym{{font-size:12px;color:var(--muted);background:var(--surface);padding:2px 8px;border-radius:6px;border:1px solid var(--border)}}
+  .badge{{font-size:11px;font-weight:600;padding:4px 10px;border-radius:20px;white-space:nowrap}}
+  .badge-active{{background:var(--green-dim);color:var(--green);border:1px solid var(--green-border)}}
+  .badge-false{{background:var(--red-dim);color:var(--red);border:1px solid var(--red-border)}}
+  .card-body{{padding:0 16px 14px;display:flex;flex-direction:column;gap:7px}}
+  .row-info{{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.04)}}
+  .row-info:last-child{{border-bottom:none}}
+  .lbl{{font-size:12px;color:var(--muted)}}
+  .val{{font-size:13px;color:var(--text);font-weight:500}}
+  .val.mono{{font-family:monospace;color:var(--gold);font-size:14px}}
+  .val.highlight{{color:var(--blue);font-weight:600}}
+  .false-detail{{margin-top:8px;padding:8px 12px;background:rgba(239,68,68,.08);border-radius:8px;border:1px solid var(--red-border);display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;color:#f87171}}
+  .false-detail .reason{{color:#fca5a5;font-style:italic}}
+
+  /* ── Empty ── */
+  .empty{{text-align:center;padding:80px 20px;color:var(--muted)}}
+  .empty .icon{{font-size:48px;margin-bottom:12px}}
+
+  /* ── Footer ── */
+  .footer{{text-align:center;padding:20px;font-size:11px;color:var(--subtle)}}
 </style>
 </head>
 <body>
-<div class="header"><h1>📋 گزارش هفتگی تیم</h1><div class="sub">{week_label}</div></div>
+<div class="hero">
+  <h1>📋 گزارش هفتگی تیم</h1>
+  <div class="period">{week_label}</div>
+  <div class="stats">
+    <div class="stat"><div class="num">{len(rows)}</div><div class="lbl2">کل آلارم</div></div>
+    <div class="stat green"><div class="num">{active_count}</div><div class="lbl2">فعال</div></div>
+    <div class="stat red"><div class="num">{false_count}</div><div class="lbl2">False شده</div></div>
+  </div>
+</div>
 <div class="week-nav">
   <a href="/report/weekly?w=this" class="week-btn {'active' if which=='this' else ''}">📅 این هفته</a>
   <a href="/report/weekly?w=last" class="week-btn {'active' if which=='last' else ''}">📅 هفته قبل</a>
 </div>
-<div class="count">{len(rows)} آلارم</div>
-{'<div class="empty">📭 آلارمی ثبت نشده</div>' if not rows else rows_html}
+<div class="list">
+  {'<div class="empty"><div class="icon">📭</div>آلارمی ثبت نشده</div>' if not rows else rows_html}
+</div>
+<div class="footer">آخرین بروزرسانی: {now_dt.strftime('%H:%M — %d/%m/%Y')}</div>
 </body></html>"""
     return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
