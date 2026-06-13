@@ -883,21 +883,21 @@ def _assignment_scheduler():
             # ۸ صبح روزهای کاری (دوشنبه تا جمعه)
             for d in range(7):
                 t = now_dt.replace(hour=8, minute=0, second=0, microsecond=0) + timedelta(days=d)
-                if t >= now_dt and t.weekday() not in (5, 6):
+                if t > now_dt and t.weekday() not in (5, 6):
                     candidates.append(("8am", t))
                     break
 
             # ۱۶ روزهای کاری
             for d in range(7):
                 t = now_dt.replace(hour=16, minute=0, second=0, microsecond=0) + timedelta(days=d)
-                if t >= now_dt and t.weekday() not in (5, 6):
+                if t > now_dt and t.weekday() not in (5, 6):
                     candidates.append(("16", t))
                     break
 
             # ۲۰ روزهای کاری
             for d in range(7):
                 t = now_dt.replace(hour=20, minute=0, second=0, microsecond=0) + timedelta(days=d)
-                if t >= now_dt and t.weekday() not in (5, 6):
+                if t > now_dt and t.weekday() not in (5, 6):
                     candidates.append(("20", t))
                     break
 
@@ -966,6 +966,54 @@ def _assignment_scheduler():
 
 # ─── startup: بازسازی state از Supabase ─────────────────────────────
 
+def _check_missed_shifts_on_startup():
+    """
+    موقع startup چک کن کدوم شیفت‌های امروز miss شدن و اجرا کن.
+    اگه الان بین ۱۶-۲۰ هستیم و آلارم morning داریم → انتقال بده
+    اگه الان بعد از ۲۰ هستیم و آلارم morning/evening داریم → شب کن
+    اگه الان بعد از ۸ هستیم و آلارم night داریم → تقسیم کن
+    """
+    now_dt = datetime.now(TEHRAN)
+    weekday = now_dt.weekday()
+    h = now_dt.hour
+
+    if weekday in (5, 6):  # شنبه/یکشنبه
+        return
+
+    print(f"[assign] startup: چک missed shifts — ساعت {h}:00")
+
+    # ساعت ۸ تا ۱۶ — چک کن آلارم‌های شب تقسیم شدن
+    if 8 <= h < 16:
+        rows = _sb_load_pending_shifts(["night", "evening_handover", "weekend_pending"])
+        if rows:
+            print(f"[assign] startup: {len(rows)} آلارم شب تقسیم نشده — انجام میشه")
+            threading.Thread(
+                target=_send_handover_replies,
+                args=(rows, SHIFT_MORNING["members"], "تقسیم آلارم شب (جبران)"),
+                daemon=True).start()
+
+    # ساعت ۱۶ تا ۲۰ — چک کن صبح‌ها انتقال پیدا کردن
+    elif 16 <= h < 20:
+        rows = _sb_load_pending_shifts(["morning"])
+        if rows:
+            print(f"[assign] startup: {len(rows)} آلارم صبح انتقال نشده — انجام میشه")
+            threading.Thread(
+                target=_send_handover_replies,
+                args=(rows, SHIFT_EVENING["members"], "انتقال از شیفت صبح (جبران)"),
+                daemon=True).start()
+
+    # بعد از ۲۰ — چک کن عصری‌ها به night رفتن
+    elif h >= 20:
+        rows_ev = _sb_load_pending_shifts(["morning", "evening", "evening_handover"])
+        if rows_ev:
+            print(f"[assign] startup: {len(rows_ev)} آلارم عصر→شب نرفته — انجام میشه")
+            for row in rows_ev:
+                threading.Thread(
+                    target=_sb_update_shift,
+                    args=(row["id"], "night"),
+                    daemon=True).start()
+            print(f"[assign] {len(rows_ev)} آلارم → night")
+
 def _sb_restore_on_startup():
     """
     بعد از هر restart همه چیز رو از Supabase بازسازی کن.
@@ -974,6 +1022,8 @@ def _sb_restore_on_startup():
     rows = _sb_load_active_assignments()
     _rebuild_active_assign_count(rows)
     print(f"[assign] startup: {len(rows)} آلارم active از Supabase بازسازی شد")
+    # جبران شیفت‌های miss شده
+    _check_missed_shifts_on_startup()
 
 
 
@@ -2681,23 +2731,34 @@ def _do_update(upd, token):
 
                     elif cbq_data.startswith("weekly_report:"):
                         answer_callback(token_cbq, cbq_id, "⏳ در حال بارگذاری...")
+                        wr_parts = cbq_data.split(":")
+                        cbq_cid_wr = wr_parts[1]
+                        wr_which = wr_parts[2] if len(wr_parts) > 2 else "this"  # this | last
                         now_dt_wr = datetime.now(TEHRAN)
                         days_since_sat = (now_dt_wr.weekday() - 5) % 7
-                        week_start = (now_dt_wr - timedelta(days=days_since_sat)).replace(
+                        this_week_start = (now_dt_wr - timedelta(days=days_since_sat)).replace(
                             hour=0, minute=0, second=0, microsecond=0)
+                        if wr_which == "last":
+                            week_start = this_week_start - timedelta(days=7)
+                            week_end   = this_week_start
+                        else:
+                            week_start = this_week_start
+                            week_end   = None  # تا الان
                         week_start_str = week_start.strftime("%Y-%m-%dT%H:%M:%S")
+                        week_label = f"{week_start.strftime('%d/%m')} — {(week_end - timedelta(days=1)).strftime('%d/%m') if week_end else 'الان'}"
                         rows_wr = []
                         if SUPABASE_KEY:
                             try:
-                                r_wr = requests.get(
-                                    f"{SUPABASE_URL}/rest/v1/alarm_assignments"
-                                    f"?fired_at=gte.{week_start_str}&select=*&order=fired_at.asc",
-                                    headers=_sb_h(), timeout=10)
+                                url_wr = (f"{SUPABASE_URL}/rest/v1/alarm_assignments"
+                                          f"?fired_at=gte.{week_start_str}&select=*&order=fired_at.asc")
+                                if week_end:
+                                    url_wr += f"&fired_at=lt.{week_end.strftime('%Y-%m-%dT%H:%M:%S')}"
+                                r_wr = requests.get(url_wr, headers=_sb_h(), timeout=10)
                                 if r_wr.status_code == 200:
                                     rows_wr = r_wr.json()
                             except Exception as e:
                                 print(f"[weekly] load exc: {e}")
-                        # لود همه آلارم‌ها — active + archive (fired شده‌ها)
+                        # لود همه آلارم‌ها — active + archive
                         _raw_wr = _sb_load_all_alerts()
                         if _raw_wr and isinstance(_raw_wr, dict):
                             all_alerts_wr = _raw_wr.get("alarms", []) + _raw_wr.get("archive", [])
@@ -2707,16 +2768,25 @@ def _do_update(upd, token):
                         private_ids_wr = {str(a["id"]) for a in all_alerts_wr if a.get("is_private")}
                         alerts_by_id_wr = {str(a["id"]): a for a in all_alerts_wr}
                         rows_wr = [r for r in rows_wr if str(r.get("id","")) not in private_ids_wr]
+                        # دکمه‌های هفته
+                        kb_wr_nav = [
+                            [{"text": "📅 این هفته" if wr_which == "last" else "📅 این هفته ✓",
+                              "callback_data": f"weekly_report:{cbq_cid_wr}:this"},
+                             {"text": "📅 هفته قبل ✓" if wr_which == "last" else "📅 هفته قبل",
+                              "callback_data": f"weekly_report:{cbq_cid_wr}:last"}],
+                            [{"text": "🔄 بروزرسانی", "callback_data": f"weekly_report:{cbq_cid_wr}:{wr_which}"},
+                             {"text": "✕ بستن",       "callback_data": f"weekly_report_close:{cbq_cid_wr}"}]
+                        ]
                         if not rows_wr:
                             edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
-                                f"📋 <b>گزارش هفتگی تیم</b>\n\n"
-                                f"از {week_start.strftime('%d/%m')} تا الان\n\n"
-                                f"📭 هیچ آلارم تیمی در این هفته ثبت نشده.",
-                                [[{"text": "✕ بستن", "callback_data": f"weekly_report_close:{cbq_cid}"}]])
+                                f"📋 <b>گزارش هفتگی تیم</b>\n"
+                                f"<i>{week_label}</i>\n\n"
+                                f"📭 هیچ آلارم تیمی ثبت نشده.",
+                                kb_wr_nav)
                         else:
                             lines_wr = [
                                 f"📋 <b>گزارش هفتگی تیم</b>",
-                                f"<i>از {week_start.strftime('%d/%m')} تا الان — {len(rows_wr)} آلارم</i>",
+                                f"<i>{week_label} — {len(rows_wr)} آلارم</i>",
                                 ""
                             ]
                             for row_wr in rows_wr:
@@ -2728,12 +2798,11 @@ def _do_update(upd, token):
                                 false_at_wr  = row_wr.get("false_at", "")[:16] if row_wr.get("false_at") else ""
                                 false_rsn_wr = row_wr.get("false_reason", "") or ""
                                 is_active_wr = row_wr.get("is_active", True)
-                                # اطلاعات اصلی از alerts جدول
                                 alert_wr   = alerts_by_id_wr.get(aid_wr, {})
-                                sym_wr     = alert_wr.get("symbol", "") or ""
-                                tgt_raw    = alert_wr.get("target_price", 0) or 0
+                                sym_wr     = alert_wr.get("symbol", "") or row_wr.get("symbol", "") or ""
+                                tgt_raw    = alert_wr.get("target_price", 0) or row_wr.get("target_price", 0) or 0
                                 target_wr  = fmt_price(float(tgt_raw), sym_wr) if tgt_raw else "—"
-                                creator_wr = alert_wr.get("created_by", "") or "—"
+                                creator_wr = alert_wr.get("created_by", "") or row_wr.get("created_by", "") or "—"
                                 created_wr = str(alert_wr.get("created_at", ""))[:16]
                                 lines_wr.append(f"🔖 <b>{tag_wr}</b>  |  #{sym_wr}")
                                 if created_wr:
@@ -2752,9 +2821,7 @@ def _do_update(upd, token):
                             full_wr = "\n".join(lines_wr)
                             if len(full_wr) > 4000:
                                 full_wr = full_wr[:3980] + "\n\n<i>... (بیش از حد نمایش)</i>"
-                            kb_wr = [[{"text": "🔄 بروزرسانی", "callback_data": f"weekly_report:{cbq_cid}"},
-                                      {"text": "✕ بستن",       "callback_data": f"weekly_report_close:{cbq_cid}"}]]
-                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, full_wr, kb_wr)
+                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, full_wr, kb_wr_nav)
 
                     elif cbq_data.startswith("weekly_report_close:"):
                         answer_callback(token_cbq, cbq_id, "بسته شد")
@@ -3328,7 +3395,7 @@ def _do_update(upd, token):
                     status_kb.append([{"text": "📡 سیگنال‌های من", "callback_data": f"signals_view:{cid}:mine"},
                                       {"text": "📊 همه سیگنال‌ها", "callback_data": f"signals_view:{cid}:all"}])
                     status_kb.append([{"text": "🎯 لیست تریگر", "callback_data": f"trigger_list:{cid}"},
-                                      {"text": "📋 گزارش هفتگی", "callback_data": f"weekly_report:{cid}"}])
+                                      {"text": "📋 گزارش هفتگی", "callback_data": f"weekly_report:{cid}:this"}])
                     status_kb.append([{"text": "🔔 نمایش آلارم‌های فعال", "callback_data": f"resend_active:{cid}"}])
                     send_tg_keyboard(token, cid, status_text, status_kb)
 
