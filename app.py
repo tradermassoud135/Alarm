@@ -269,6 +269,7 @@ def save_alert_fired(a):
 # Supabase
 # =====================================================================
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://erwimqqskkzcsayvhxot.supabase.co")
+APP_BASE_URL = os.environ.get("APP_BASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
 def _sb_h():
@@ -2733,7 +2734,9 @@ def _do_update(upd, token):
                         answer_callback(token_cbq, cbq_id, "⏳ در حال بارگذاری...")
                         wr_parts = cbq_data.split(":")
                         cbq_cid_wr = wr_parts[1]
-                        wr_which = wr_parts[2] if len(wr_parts) > 2 else "this"  # this | last
+                        wr_which   = wr_parts[2] if len(wr_parts) > 2 else "this"
+                        wr_page    = int(wr_parts[3]) if len(wr_parts) > 3 else 0
+                        PER_PAGE   = 5
                         now_dt_wr = datetime.now(TEHRAN)
                         days_since_sat = (now_dt_wr.weekday() - 5) % 7
                         this_week_start = (now_dt_wr - timedelta(days=days_since_sat)).replace(
@@ -2743,7 +2746,7 @@ def _do_update(upd, token):
                             week_end   = this_week_start
                         else:
                             week_start = this_week_start
-                            week_end   = None  # تا الان
+                            week_end   = None
                         week_start_str = week_start.strftime("%Y-%m-%dT%H:%M:%S")
                         week_label = f"{week_start.strftime('%d/%m')} — {(week_end - timedelta(days=1)).strftime('%d/%m') if week_end else 'الان'}"
                         rows_wr = []
@@ -2768,28 +2771,48 @@ def _do_update(upd, token):
                         private_ids_wr = {str(a["id"]) for a in all_alerts_wr if a.get("is_private")}
                         alerts_by_id_wr = {str(a["id"]): a for a in all_alerts_wr}
                         rows_wr = [r for r in rows_wr if str(r.get("id","")) not in private_ids_wr]
-                        # دکمه‌های هفته
-                        kb_wr_nav = [
-                            [{"text": "📅 این هفته" if wr_which == "last" else "📅 این هفته ✓",
-                              "callback_data": f"weekly_report:{cbq_cid_wr}:this"},
-                             {"text": "📅 هفته قبل ✓" if wr_which == "last" else "📅 هفته قبل",
-                              "callback_data": f"weekly_report:{cbq_cid_wr}:last"}],
-                            [{"text": "🔄 بروزرسانی", "callback_data": f"weekly_report:{cbq_cid_wr}:{wr_which}"},
-                             {"text": "✕ بستن",       "callback_data": f"weekly_report_close:{cbq_cid_wr}"}]
+                        # صفحه‌بندی
+                        total = len(rows_wr)
+                        total_pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
+                        wr_page = max(0, min(wr_page, total_pages - 1))
+                        page_rows = rows_wr[wr_page * PER_PAGE:(wr_page + 1) * PER_PAGE]
+
+                        # دکمه‌های ناوبری
+                        nav_row = []
+                        if wr_which == "last":
+                            nav_row.append({"text": "📅 این هفته", "callback_data": f"weekly_report:{cbq_cid_wr}:this:0"})
+                            nav_row.append({"text": "📅 هفته قبل ✓", "callback_data": f"weekly_report:{cbq_cid_wr}:last:0"})
+                        else:
+                            nav_row.append({"text": "📅 این هفته ✓", "callback_data": f"weekly_report:{cbq_cid_wr}:this:0"})
+                            nav_row.append({"text": "📅 هفته قبل", "callback_data": f"weekly_report:{cbq_cid_wr}:last:0"})
+                        page_row = []
+                        if wr_page > 0:
+                            page_row.append({"text": "‹ قبلی", "callback_data": f"weekly_report:{cbq_cid_wr}:{wr_which}:{wr_page-1}"})
+                        page_row.append({"text": f"صفحه {wr_page+1}/{total_pages}", "callback_data": "noop"})
+                        if wr_page < total_pages - 1:
+                            page_row.append({"text": "بعدی ›", "callback_data": f"weekly_report:{cbq_cid_wr}:{wr_which}:{wr_page+1}"})
+                        action_row = [
+                            {"text": "🔄 بروزرسانی", "callback_data": f"weekly_report:{cbq_cid_wr}:{wr_which}:{wr_page}"},
+                            {"text": "✕ بستن", "callback_data": f"weekly_report_close:{cbq_cid_wr}"}
                         ]
+                        kb_wr_nav = [nav_row]
+                        if total_pages > 1:
+                            kb_wr_nav.append(page_row)
+                        kb_wr_nav.append(action_row)
+                        if APP_BASE_URL:
+                            kb_wr_nav.append([{"text": "🌐 نسخه وب", "url": f"{APP_BASE_URL}/report/weekly?w={wr_which}"}])
+
                         if not rows_wr:
                             edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
-                                f"📋 <b>گزارش هفتگی تیم</b>\n"
-                                f"<i>{week_label}</i>\n\n"
-                                f"📭 هیچ آلارم تیمی ثبت نشده.",
+                                f"📋 <b>گزارش هفتگی تیم</b>\n<i>{week_label}</i>\n\n📭 هیچ آلارم تیمی ثبت نشده.",
                                 kb_wr_nav)
                         else:
                             lines_wr = [
                                 f"📋 <b>گزارش هفتگی تیم</b>",
-                                f"<i>{week_label} — {len(rows_wr)} آلارم</i>",
+                                f"<i>{week_label} — {total} آلارم | صفحه {wr_page+1}/{total_pages}</i>",
                                 ""
                             ]
-                            for row_wr in rows_wr:
+                            for row_wr in page_rows:
                                 aid_wr       = str(row_wr.get("id", ""))
                                 tag_wr       = row_wr.get("alarm_tag", "—")
                                 assignee_wr  = row_wr.get("assigned_to", "") or "—"
@@ -2818,10 +2841,7 @@ def _do_update(upd, token):
                                     if false_rsn_wr:
                                         lines_wr.append(f"📝 علت: {false_rsn_wr}")
                                 lines_wr.append("──────────────")
-                            full_wr = "\n".join(lines_wr)
-                            if len(full_wr) > 4000:
-                                full_wr = full_wr[:3980] + "\n\n<i>... (بیش از حد نمایش)</i>"
-                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, full_wr, kb_wr_nav)
+                            edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, "\n".join(lines_wr), kb_wr_nav)
 
                     elif cbq_data.startswith("weekly_report_close:"):
                         answer_callback(token_cbq, cbq_id, "بسته شد")
@@ -3395,7 +3415,7 @@ def _do_update(upd, token):
                     status_kb.append([{"text": "📡 سیگنال‌های من", "callback_data": f"signals_view:{cid}:mine"},
                                       {"text": "📊 همه سیگنال‌ها", "callback_data": f"signals_view:{cid}:all"}])
                     status_kb.append([{"text": "🎯 لیست تریگر", "callback_data": f"trigger_list:{cid}"},
-                                      {"text": "📋 گزارش هفتگی", "callback_data": f"weekly_report:{cid}:this"}])
+                                      {"text": "📋 گزارش هفتگی", "callback_data": f"weekly_report:{cid}:this:0"}])
                     status_kb.append([{"text": "🔔 نمایش آلارم‌های فعال", "callback_data": f"resend_active:{cid}"}])
                     send_tg_keyboard(token, cid, status_text, status_kb)
 
@@ -6870,6 +6890,119 @@ _sb_load_fired_msgs()
 _sb_load_sym_counters()
 # بازسازی کامل state از Supabase بعد از هر restart
 _sb_restore_on_startup()
+
+@app.route("/report/weekly")
+def report_weekly_html():
+    """گزارش هفتگی HTML — زیبا و کامل"""
+    which = request.args.get("w", "this")
+    now_dt = datetime.now(TEHRAN)
+    days_since_sat = (now_dt.weekday() - 5) % 7
+    this_week_start = (now_dt - timedelta(days=days_since_sat)).replace(hour=0, minute=0, second=0, microsecond=0)
+    if which == "last":
+        week_start = this_week_start - timedelta(days=7)
+        week_end   = this_week_start
+    else:
+        week_start = this_week_start
+        week_end   = None
+    week_start_str = week_start.strftime("%Y-%m-%dT%H:%M:%S")
+    week_label = f"{week_start.strftime('%d/%m')} — {(week_end - timedelta(days=1)).strftime('%d/%m') if week_end else now_dt.strftime('%d/%m')}"
+    rows = []
+    if SUPABASE_KEY:
+        try:
+            url = (f"{SUPABASE_URL}/rest/v1/alarm_assignments"
+                   f"?fired_at=gte.{week_start_str}&select=*&order=fired_at.asc")
+            if week_end:
+                url += f"&fired_at=lt.{week_end.strftime('%Y-%m-%dT%H:%M:%S')}"
+            r = requests.get(url, headers=_sb_h(), timeout=10)
+            if r.status_code == 200:
+                rows = r.json()
+        except: pass
+    raw = _sb_load_all_alerts()
+    if raw and isinstance(raw, dict):
+        all_alerts = raw.get("alarms", []) + raw.get("archive", [])
+    else:
+        fb = load_alerts()
+        all_alerts = fb.get("alarms", []) + fb.get("archive", [])
+    alerts_map = {str(a["id"]): a for a in all_alerts}
+    rows = [r for r in rows if not alerts_map.get(str(r.get("id","")), {}).get("is_private")]
+    rows_html = ""
+    for row in rows:
+        aid       = str(row.get("id",""))
+        tag       = row.get("alarm_tag","—")
+        assignee  = row.get("assigned_to","") or "⏳ منتظر"
+        fired     = row.get("fired_at","")[:16]
+        false_by  = row.get("false_by","") or ""
+        false_at  = row.get("false_at","")[:16] if row.get("false_at") else ""
+        false_rsn = row.get("false_reason","") or ""
+        is_active = row.get("is_active", True)
+        alert     = alerts_map.get(aid, {})
+        sym       = alert.get("symbol","") or row.get("symbol","") or ""
+        tgt_raw   = alert.get("target_price",0) or row.get("target_price",0) or 0
+        target    = fmt_price(float(tgt_raw), sym) if tgt_raw else "—"
+        creator   = alert.get("created_by","") or row.get("created_by","") or "—"
+        created   = str(alert.get("created_at",""))[:16]
+        status_cls = "active" if is_active else "false"
+        status_txt = "✅ فعال" if is_active else f"❌ False — {false_by}"
+        false_row = f'<div class="false-detail">🕐 {false_at}{"  |  📝 "+false_rsn if false_rsn else ""}</div>' if not is_active and false_at else ""
+        rows_html += f"""
+        <div class="card {'card-active' if is_active else 'card-false'}">
+          <div class="card-header">
+            <span class="tag">{tag}</span><span class="sym">#{sym}</span>
+            <span class="status {status_cls}">{status_txt}</span>
+          </div>
+          <div class="card-body">
+            <div class="info-grid">
+              <div class="info-item"><span class="lbl">📅 ثبت</span><span class="val">{created}</span></div>
+              <div class="info-item"><span class="lbl">🎯 هدف</span><span class="val mono">{target}</span></div>
+              <div class="info-item"><span class="lbl">👤 سازنده</span><span class="val">{creator}</span></div>
+              <div class="info-item"><span class="lbl">⏰ فایر شد</span><span class="val">{fired}</span></div>
+              <div class="info-item"><span class="lbl">🙋 مسئول</span><span class="val">{assignee}</span></div>
+            </div>{false_row}
+          </div>
+        </div>"""
+    html = f"""<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>گزارش هفتگی تیم</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:Tahoma,Arial,sans-serif;background:#0f1117;color:#e0e0e0;padding:16px;direction:rtl}}
+.header{{text-align:center;padding:20px 0 24px}}
+.header h1{{font-size:20px;color:#fff;margin-bottom:6px}}
+.sub{{font-size:13px;color:#888}}
+.week-nav{{display:flex;gap:10px;justify-content:center;margin-bottom:20px}}
+.week-btn{{padding:8px 20px;border-radius:8px;border:1px solid #333;background:#1a1d27;color:#aaa;text-decoration:none;font-size:13px}}
+.week-btn.active{{background:#2563eb;border-color:#2563eb;color:#fff}}
+.count{{text-align:center;font-size:13px;color:#666;margin-bottom:16px}}
+.card{{border-radius:12px;padding:14px;margin-bottom:12px;border:1px solid #222}}
+.card-active{{background:#111827;border-color:#1e3a5f}}
+.card-false{{background:#120c0c;border-color:#3a1515;opacity:.85}}
+.card-header{{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}}
+.tag{{font-weight:bold;font-size:15px;color:#60a5fa}}
+.sym{{font-size:13px;color:#666}}
+.status{{font-size:12px;padding:3px 10px;border-radius:20px;margin-right:auto}}
+.status.active{{background:#052e16;color:#4ade80}}
+.status.false{{background:#2d0a0a;color:#f87171}}
+.info-grid{{display:grid;grid-template-columns:1fr 1fr;gap:8px}}
+.info-item{{display:flex;flex-direction:column;gap:2px}}
+.lbl{{font-size:11px;color:#555}}
+.val{{font-size:13px;color:#ccc}}
+.mono{{font-family:monospace;color:#fbbf24}}
+.false-detail{{font-size:12px;color:#888;margin-top:10px;padding-top:10px;border-top:1px solid #2a1a1a}}
+.empty{{text-align:center;padding:60px 0;color:#444;font-size:14px}}
+</style>
+</head>
+<body>
+<div class="header"><h1>📋 گزارش هفتگی تیم</h1><div class="sub">{week_label}</div></div>
+<div class="week-nav">
+  <a href="/report/weekly?w=this" class="week-btn {'active' if which=='this' else ''}">📅 این هفته</a>
+  <a href="/report/weekly?w=last" class="week-btn {'active' if which=='last' else ''}">📅 هفته قبل</a>
+</div>
+<div class="count">{len(rows)} آلارم</div>
+{'<div class="empty">📭 آلارمی ثبت نشده</div>' if not rows else rows_html}
+</body></html>"""
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
