@@ -1671,6 +1671,7 @@ def daily_news_scheduler():
 _pending_name  = {}  # cid → True
 _pending_alarm = {}  # cid → {"step": str, "data": dict}
 _pending_reminder = {}  # cid → {step, bot_msg_id}
+_pending_weekly_search = {}  # cid → {"which": str, "msg_id": int}
 
 # ── Reply Keyboard rows ──────────────────────────────────────
 MAIN_MENU = [
@@ -2799,7 +2800,8 @@ def _do_update(upd, token):
                             if wr_page < total_pages - 1:
                                 page_row.append({"text": "بعدی ›", "callback_data": f"weekly_report:{cbq_cid_wr}:{wr_which}:{wr_page+1}"})
                             kb_wr_nav.append(page_row)
-                        kb_wr_nav.append([{"text": "✕ بستن", "callback_data": f"weekly_report_close:{cbq_cid_wr}"}])
+                        kb_wr_nav.append([{"text": "🔍 جستجو", "callback_data": f"weekly_search:{cbq_cid_wr}:{wr_which}"},
+                                          {"text": "✕ بستن", "callback_data": f"weekly_report_close:{cbq_cid_wr}"}])
 
                         if not rows_wr:
                             edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
@@ -2826,7 +2828,9 @@ def _do_update(upd, token):
                                 target_wr  = fmt_price(float(tgt_raw), sym_wr) if tgt_raw else "—"
                                 creator_wr = alert_wr.get("created_by", "") or row_wr.get("created_by", "") or "—"
                                 created_wr = str(alert_wr.get("created_at", ""))[:16]
-                                lines_wr.append(f"🔖 <b>{tag_wr}</b>  |  #{sym_wr}")
+                                cond_wr    = alert_wr.get("condition", "") or row_wr.get("condition", "")
+                                dir_wr     = "📈 ناحیه سل" if cond_wr == "above" else ("📉 ناحیه بای" if cond_wr == "below" else "")
+                                lines_wr.append(f"🔖 <b>{tag_wr}</b>  |  #{sym_wr}" + (f"  |  {dir_wr}" if dir_wr else ""))
                                 if created_wr:
                                     lines_wr.append(f"📅 ثبت: {created_wr}")
                                 lines_wr.append(f"🎯 هدف: <code>{target_wr}</code>")
@@ -2850,6 +2854,14 @@ def _do_update(upd, token):
                                 json={"chat_id": cbq_cid, "message_id": cbq_msg_id},
                                 timeout=8, headers=H)
                         except: pass
+
+                    elif cbq_data.startswith("weekly_search:"):
+                        answer_callback(token_cbq, cbq_id, "")
+                        ws_parts = cbq_data.split(":")
+                        ws_cid   = ws_parts[1]
+                        ws_which = ws_parts[2] if len(ws_parts) > 2 else "this"
+                        _pending_weekly_search[ws_cid] = {"which": ws_which, "msg_id": cbq_msg_id}
+                        send_tg(token_cbq, ws_cid, "🔍 اسم مسئول، نماد یا تگ رو بفرست (مثلاً: مسعود):")
 
                     elif cbq_data.startswith("resend_active:"):
                         answer_callback(token_cbq, cbq_id, "⏳ در حال ارسال...")
@@ -3215,6 +3227,103 @@ def _do_update(upd, token):
                             f"👋 سلام <b>{uname}</b>!\n\n"
                             f"لطفاً <b>اسمی که در سایت استفاده می‌کنی</b> رو بنویس:\n"
                             f"(آلارم‌های شخصیت با همین اسم شناسایی میشن)")
+
+                # ── دریافت کوئری جستجوی گزارش هفتگی ──────────────────
+                elif cid in _pending_weekly_search and not txt.startswith("/"):
+                    ws_info = _pending_weekly_search.pop(cid)
+                    ws_which = ws_info["which"]
+                    query = txt.strip().lower()
+
+                    now_dt_ws = datetime.now(TEHRAN)
+                    days_since_sat_ws = (now_dt_ws.weekday() - 5) % 7
+                    this_week_start_ws = (now_dt_ws - timedelta(days=days_since_sat_ws)).replace(
+                        hour=0, minute=0, second=0, microsecond=0)
+                    if ws_which == "last":
+                        week_start_ws = this_week_start_ws - timedelta(days=7)
+                        week_end_ws   = this_week_start_ws
+                    else:
+                        week_start_ws = this_week_start_ws
+                        week_end_ws   = None
+                    week_start_str_ws = week_start_ws.strftime("%Y-%m-%dT%H:%M:%S")
+                    week_label_ws = f"{week_start_ws.strftime('%d/%m')} — {(week_end_ws - timedelta(days=1)).strftime('%d/%m') if week_end_ws else 'الان'}"
+
+                    rows_ws = []
+                    if SUPABASE_KEY:
+                        try:
+                            url_ws = (f"{SUPABASE_URL}/rest/v1/alarm_assignments"
+                                      f"?fired_at=gte.{week_start_str_ws}&select=*&order=fired_at.asc")
+                            if week_end_ws:
+                                url_ws += f"&fired_at=lt.{week_end_ws.strftime('%Y-%m-%dT%H:%M:%S')}"
+                            r_ws = requests.get(url_ws, headers=_sb_h(), timeout=10)
+                            if r_ws.status_code == 200:
+                                rows_ws = r_ws.json()
+                        except Exception as e:
+                            print(f"[weekly_search] load exc: {e}")
+
+                    _raw_ws = _sb_load_all_alerts()
+                    if _raw_ws and isinstance(_raw_ws, dict):
+                        all_alerts_ws = _raw_ws.get("alarms", []) + _raw_ws.get("archive", [])
+                    else:
+                        _fb_ws = load_alerts()
+                        all_alerts_ws = _fb_ws.get("alarms", []) + _fb_ws.get("archive", [])
+                    alerts_by_id_ws = {str(a["id"]): a for a in all_alerts_ws}
+                    private_ids_ws = {str(a["id"]) for a in all_alerts_ws if a.get("is_private")}
+                    rows_ws = [r for r in rows_ws if str(r.get("id","")) not in private_ids_ws]
+
+                    # فیلتر بر اساس کوئری — مسئول، نماد، تگ، سازنده
+                    filtered = []
+                    for row_ws in rows_ws:
+                        aid_ws  = str(row_ws.get("id",""))
+                        alert_ws = alerts_by_id_ws.get(aid_ws, {})
+                        sym_ws  = (alert_ws.get("symbol","") or row_ws.get("symbol","") or "").lower()
+                        tag_ws  = (row_ws.get("alarm_tag","") or "").lower()
+                        assignee_ws = (row_ws.get("assigned_to","") or "").lower()
+                        creator_ws  = (alert_ws.get("created_by","") or row_ws.get("created_by","") or "").lower()
+                        if query in sym_ws or query in tag_ws or query in assignee_ws or query in creator_ws:
+                            filtered.append(row_ws)
+
+                    if not filtered:
+                        send_tg(token, cid, f"🔍 نتیجه‌ای برای «<b>{txt.strip()}</b>» پیدا نشد.")
+                    else:
+                        lines_ws = [f"🔍 <b>نتایج جستجو: {txt.strip()}</b>",
+                                     f"<i>{week_label_ws} — {len(filtered)} نتیجه</i>", ""]
+                        for row_ws in filtered[:10]:
+                            aid_ws       = str(row_ws.get("id",""))
+                            tag_ws       = row_ws.get("alarm_tag","—")
+                            assignee_ws  = row_ws.get("assigned_to","") or "—"
+                            fired_ws     = row_ws.get("fired_at","")[:16]
+                            is_active_ws = row_ws.get("is_active", True)
+                            false_by_ws  = row_ws.get("false_by","") or ""
+                            false_at_ws  = row_ws.get("false_at","")[:16] if row_ws.get("false_at") else ""
+                            false_rsn_ws = row_ws.get("false_reason","") or ""
+                            alert_ws     = alerts_by_id_ws.get(aid_ws, {})
+                            sym_ws       = alert_ws.get("symbol","") or row_ws.get("symbol","") or ""
+                            tgt_raw_ws   = alert_ws.get("target_price",0) or row_ws.get("target_price",0) or 0
+                            target_ws    = fmt_price(float(tgt_raw_ws), sym_ws) if tgt_raw_ws else "—"
+                            creator_ws   = alert_ws.get("created_by","") or row_ws.get("created_by","") or "—"
+                            created_ws   = str(alert_ws.get("created_at",""))[:16]
+                            cond_ws      = alert_ws.get("condition","") or row_ws.get("condition","")
+                            dir_ws       = "📈 ناحیه سل" if cond_ws == "above" else ("📉 ناحیه بای" if cond_ws == "below" else "")
+                            lines_ws.append(f"🔖 <b>{tag_ws}</b>  |  #{sym_ws}" + (f"  |  {dir_ws}" if dir_ws else ""))
+                            if created_ws:
+                                lines_ws.append(f"📅 ثبت: {created_ws}")
+                            lines_ws.append(f"🎯 هدف: <code>{target_ws}</code>")
+                            lines_ws.append(f"👤 سازنده: {creator_ws}")
+                            lines_ws.append(f"⏰ فایر شد: {fired_ws}")
+                            lines_ws.append(f"🙋 مسئول: {assignee_ws}")
+                            if is_active_ws:
+                                lines_ws.append(f"✅ وضعیت: فعال")
+                            else:
+                                lines_ws.append(f"❌ وضعیت: False — {false_by_ws}  |  {false_at_ws}")
+                                if false_rsn_ws:
+                                    lines_ws.append(f"📝 علت: {false_rsn_ws}")
+                            lines_ws.append("──────────────")
+                        if len(filtered) > 10:
+                            lines_ws.append(f"<i>... و {len(filtered)-10} مورد دیگر</i>")
+                        full_ws = "\n".join(lines_ws)
+                        if len(full_ws) > 4000:
+                            full_ws = full_ws[:3980] + "\n\n<i>...</i>"
+                        send_tg(token, cid, full_ws)
 
                 # ── دریافت اسم custom بعد از /start یا /setname ──────
                 elif cid in _pending_name and not txt.startswith("/"):
@@ -6942,20 +7051,22 @@ def report_weekly_html():
         created   = str(alert.get("created_at",""))[:16]
         status_cls = "active" if is_active else "false"
         status_txt = "فعال" if is_active else f"False — {false_by}"
-        direction_icon = "📈" if "sell" not in (alert.get("condition","") or "").lower() else "📉"
-        is_buy = "sell" not in (alert.get("condition","") or "").lower()
+        cond_html = alert.get("condition", "") or row.get("condition", "")
+        is_buy = (cond_html == "below")
+        direction_icon = "📉" if cond_html == "above" else ("📈" if cond_html == "below" else "❓")
+        dir_zone_label = "ناحیه سل" if cond_html == "above" else ("ناحیه بای" if cond_html == "below" else "")
         candle_cls = "candle-up" if is_buy else "candle-down"
         false_detail = ""
         if not is_active:
             false_detail = f'<div class="false-detail"><span>🕐 {false_at}</span>{("<span class=reason>"+false_rsn+"</span>") if false_rsn else ""}</div>'
         rows_html += f"""
-        <div class="card card-{status_cls}">
+        <div class="card card-{status_cls}" data-search="{(assignee + ' ' + sym + ' ' + tag + ' ' + creator).lower()}">
           <div class="card-glow"></div>
           <div class="card-header">
             <div class="card-icon">{direction_icon}</div>
             <div class="card-title">
               <span class="tag">{tag}</span>
-              <span class="sym">{sym}</span>
+              <span class="sym">{sym}{(' • ' + dir_zone_label) if dir_zone_label else ''}</span>
             </div>
             <span class="badge badge-{status_cls}">{status_txt}</span>
           </div>
@@ -6981,7 +7092,7 @@ def report_weekly_html():
               <span class="mc {candle_cls}" style="height:85%"></span>
               <span class="mc {candle_cls}" style="height:50%"></span>
             </div>
-            <span class="rail-label">{'روند صعودی' if is_buy else 'روند نزولی'}</span>
+            <span class="rail-label">{dir_zone_label if dir_zone_label else ''}</span>
           </div>
         </div>"""
 
@@ -7065,6 +7176,15 @@ def report_weekly_html():
   .week-btn{{padding:10px 26px;border-radius:12px;border:1px solid var(--border2);background:var(--surface);color:var(--muted);text-decoration:none;font-size:13px;font-weight:600;transition:.25s;backdrop-filter:blur(10px)}}
   .week-btn:hover{{border-color:var(--blue);color:var(--blue);transform:translateY(-2px)}}
   .week-btn.active{{background:linear-gradient(135deg,var(--blue),var(--purple));border-color:transparent;color:#fff;box-shadow:0 6px 20px var(--blue-glow)}}
+
+  /* ── Search ── */
+  .search-wrap{{max-width:680px;margin:0 auto;padding:0 20px 14px;position:relative;z-index:1}}
+  .search-input{{width:100%;padding:13px 18px;border-radius:14px;border:1px solid var(--border2);
+    background:var(--surface);color:var(--text);font-size:13px;font-family:'Inter',Tahoma,sans-serif;
+    direction:rtl;outline:none;transition:.25s}}
+  .search-input:focus{{border-color:var(--blue);box-shadow:0 0 0 3px var(--blue-glow)}}
+  .search-input::placeholder{{color:var(--muted)}}
+  .search-count{{display:block;text-align:center;font-size:11px;color:var(--muted);margin-top:8px}}
 
   /* ── Cards ── */
   .list{{padding:10px 20px 40px;max-width:680px;margin:0 auto;position:relative;z-index:1}}
@@ -7152,8 +7272,13 @@ def report_weekly_html():
   <a href="/report/weekly?w=this" class="week-btn {'active' if which=='this' else ''}">📅 این هفته</a>
   <a href="/report/weekly?w=last" class="week-btn {'active' if which=='last' else ''}">📅 هفته قبل</a>
 </div>
-<div class="list">
+<div class="search-wrap">
+  <input type="text" id="searchBox" class="search-input" placeholder="🔍 جستجو بر اساس مسئول، نماد، تگ یا سازنده..." oninput="filterCards()">
+  <span class="search-count" id="searchCount"></span>
+</div>
+<div class="list" id="cardList">
   {'<div class="empty"><div class="icon">📭</div>آلارمی ثبت نشده</div>' if not rows else rows_html}
+  <div class="empty" id="noResults" style="display:none"><div class="icon">🔍</div>چیزی پیدا نشد</div>
 </div>
 <div class="footer">آخرین بروزرسانی: {now_dt.strftime('%H:%M — %d/%m/%Y')}</div>
 <script>
@@ -7168,6 +7293,19 @@ def report_weekly_html():
   document.querySelectorAll('.card').forEach((c,i) => {{
     c.style.animationDelay = (i * 0.06) + 's';
   }});
+  // search/filter
+  function filterCards() {{
+    const q = document.getElementById('searchBox').value.trim().toLowerCase();
+    const cards = document.querySelectorAll('#cardList .card');
+    let visible = 0;
+    cards.forEach(c => {{
+      const match = !q || (c.dataset.search || '').includes(q);
+      c.style.display = match ? '' : 'none';
+      if (match) visible++;
+    }});
+    document.getElementById('noResults').style.display = (q && visible === 0) ? '' : 'none';
+    document.getElementById('searchCount').textContent = q ? `${{visible}} نتیجه پیدا شد` : '';
+  }}
   // theme toggle with localStorage
   function toggleTheme() {{
     const body = document.body;
