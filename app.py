@@ -2730,6 +2730,18 @@ def _do_update(upd, token):
                                 timeout=8, headers=H)
                         except: pass
 
+                    elif cbq_data.startswith("weekly_menu:"):
+                        answer_callback(token_cbq, cbq_id, "")
+                        wm_cid = cbq_data.split(":", 1)[1]
+                        kb_menu = [
+                            [{"text": "📅 این هفته", "callback_data": f"weekly_report:{wm_cid}:this:0"},
+                             {"text": "📅 هفته قبل", "callback_data": f"weekly_report:{wm_cid}:last:0"}],
+                        ]
+                        if APP_BASE_URL:
+                            kb_menu.append([{"text": "🌐 نسخه وب", "url": f"{APP_BASE_URL}/report/weekly"}])
+                        kb_menu.append([{"text": "✕ بستن", "callback_data": f"weekly_report_close:{wm_cid}"}])
+                        send_tg_keyboard(token_cbq, cbq_cid, "📊 <b>آنالیز هفتگی تیم</b>\n\nیک گزینه رو انتخاب کن:", kb_menu)
+
                     elif cbq_data.startswith("weekly_report:"):
                         answer_callback(token_cbq, cbq_id, "⏳ در حال بارگذاری...")
                         wr_parts = cbq_data.split(":")
@@ -3402,8 +3414,7 @@ def _do_update(upd, token):
                     status_kb.append([{"text": "📡 سیگنال‌های من", "callback_data": f"signals_view:{cid}:mine"},
                                       {"text": "📊 همه سیگنال‌ها", "callback_data": f"signals_view:{cid}:all"}])
                     status_kb.append([{"text": "🎯 لیست تریگر", "callback_data": f"trigger_list:{cid}"}])
-                    status_kb.append([{"text": "📅 این هفته", "callback_data": f"weekly_report:{cid}:this:0"},
-                                      {"text": "📅 هفته قبل", "callback_data": f"weekly_report:{cid}:last:0"}])
+                    status_kb.append([{"text": "📊 آنالیز هفتگی", "callback_data": f"weekly_menu:{cid}"}])
                     status_kb.append([{"text": "🔔 نمایش آلارم‌های فعال", "callback_data": f"resend_active:{cid}"}])
                     send_tg_keyboard(token, cid, status_text, status_kb)
 
@@ -6986,7 +6997,13 @@ def report_weekly_html():
   body{{font-family:'Inter',Tahoma,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;direction:rtl;transition:background .3s,color .3s}}
 
   /* ── Scroll progress ── */
-  .scroll-bar{{position:fixed;top:0;right:0;left:0;height:3px;background:linear-gradient(90deg,var(--blue),#8b5cf6);z-index:999;width:0%;transition:width .1s}}
+  .scroll-bar{{position:fixed;top:0;right:0;left:0;height:4px;background:var(--border);z-index:999;overflow:hidden}}
+  .scroll-bar-fill{{height:100%;width:0%;background:linear-gradient(90deg,var(--green),var(--blue),#8b5cf6);transition:width .08s;position:relative}}
+  .scroll-bar-fill::after{{content:'';position:absolute;left:0;top:0;bottom:0;right:0;
+    background:repeating-linear-gradient(90deg,transparent 0 6px,rgba(255,255,255,.25) 6px 8px);}}
+  .scroll-dot{{position:fixed;top:0;width:14px;height:14px;border-radius:50%;
+    background:var(--blue);box-shadow:0 0 10px var(--blue);z-index:1000;
+    transform:translate(-50%,-5px);transition:left .08s;display:flex;align-items:center;justify-content:center;font-size:8px}}
 
   /* ── Theme toggle ── */
   .theme-toggle{{position:fixed;top:14px;left:14px;z-index:998;width:42px;height:42px;border-radius:50%;border:1px solid var(--border2);background:var(--surface);color:var(--text);font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 10px rgba(0,0,0,.15);transition:.2s}}
@@ -7059,7 +7076,8 @@ def report_weekly_html():
 </style>
 </head>
 <body data-theme="dark">
-<div class="scroll-bar" id="scrollBar"></div>
+<div class="scroll-bar"><div class="scroll-bar-fill" id="scrollFill"></div></div>
+<div class="scroll-dot" id="scrollDot">📈</div>
 <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()">🌙</button>
 <div class="hero">
   <h1>📋 گزارش هفتگی تیم</h1>
@@ -7079,11 +7097,12 @@ def report_weekly_html():
 </div>
 <div class="footer">آخرین بروزرسانی: {now_dt.strftime('%H:%M — %d/%m/%Y')}</div>
 <script>
-  // scroll progress bar
+  // scroll progress — chart line style
   window.addEventListener('scroll', () => {{
     const h = document.documentElement;
     const pct = (h.scrollTop / (h.scrollHeight - h.clientHeight)) * 100;
-    document.getElementById('scrollBar').style.width = pct + '%';
+    document.getElementById('scrollFill').style.width = pct + '%';
+    document.getElementById('scrollDot').style.left = pct + '%';
   }});
   // stagger card animations
   document.querySelectorAll('.card').forEach((c,i) => {{
