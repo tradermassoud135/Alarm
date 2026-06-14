@@ -6942,25 +6942,46 @@ def report_weekly_html():
         created   = str(alert.get("created_at",""))[:16]
         status_cls = "active" if is_active else "false"
         status_txt = "فعال" if is_active else f"False — {false_by}"
+        direction_icon = "📈" if "sell" not in (alert.get("condition","") or "").lower() else "📉"
+        is_buy = "sell" not in (alert.get("condition","") or "").lower()
+        candle_cls = "candle-up" if is_buy else "candle-down"
         false_detail = ""
         if not is_active:
             false_detail = f'<div class="false-detail"><span>🕐 {false_at}</span>{("<span class=reason>"+false_rsn+"</span>") if false_rsn else ""}</div>'
         rows_html += f"""
         <div class="card card-{status_cls}">
+          <div class="card-glow"></div>
           <div class="card-header">
+            <div class="card-icon">{direction_icon}</div>
             <div class="card-title">
               <span class="tag">{tag}</span>
               <span class="sym">{sym}</span>
             </div>
             <span class="badge badge-{status_cls}">{status_txt}</span>
           </div>
+          <div class="card-target">
+            <span class="target-lbl">🎯 قیمت هدف</span>
+            <span class="target-val">{target}</span>
+          </div>
           <div class="card-body">
-            <div class="row-info"><span class="lbl">📅 ثبت آلارم</span><span class="val">{created}</span></div>
-            <div class="row-info"><span class="lbl">⏰ فایر شد</span><span class="val">{fired}</span></div>
-            <div class="row-info"><span class="lbl">🎯 قیمت هدف</span><span class="val mono">{target}</span></div>
-            <div class="row-info"><span class="lbl">👤 سازنده</span><span class="val">{creator}</span></div>
-            <div class="row-info"><span class="lbl">🙋 مسئول تریگر</span><span class="val highlight">{assignee}</span></div>
+            <div class="info-grid">
+              <div class="info-cell"><span class="lbl">📅 ثبت</span><span class="val">{created}</span></div>
+              <div class="info-cell"><span class="lbl">⏰ فایر</span><span class="val">{fired}</span></div>
+              <div class="info-cell"><span class="lbl">👤 سازنده</span><span class="val">{creator}</span></div>
+              <div class="info-cell"><span class="lbl">🙋 مسئول</span><span class="val highlight">{assignee}</span></div>
+            </div>
             {false_detail}
+          </div>
+          <div class="card-rail">
+            <div class="rail-dot {candle_cls}"></div>
+            <div class="mini-candles">
+              <span class="mc {candle_cls}" style="height:40%"></span>
+              <span class="mc {candle_cls}" style="height:65%"></span>
+              <span class="mc {candle_cls}" style="height:30%"></span>
+              <span class="mc {candle_cls}" style="height:85%"></span>
+              <span class="mc {candle_cls}" style="height:50%"></span>
+            </div>
+            <span class="rail-label">{'روند صعودی' if is_buy else 'روند نزولی'}</span>
           </div>
         </div>"""
 
@@ -6973,109 +6994,148 @@ def report_weekly_html():
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>گزارش هفتگی تیم — {week_label}</title>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
   *{{box-sizing:border-box;margin:0;padding:0}}
   :root{{
-    --bg:#080c14;--surface:#0d1424;--surface2:#111827;
-    --border:#1e293b;--border2:#243044;
+    --bg:#070a12;--surface:#0d1424;--surface2:#10192e;
+    --border:#1e293b;--border2:#2d3f5c;
     --text:#e2e8f0;--muted:#64748b;--subtle:#334155;
-    --blue:#3b82f6;--blue-dim:#1e3a5f;
-    --green:#22c55e;--green-dim:#052e16;--green-border:#166534;
-    --red:#ef4444;--red-dim:#1c0a0a;--red-border:#7f1d1d;
-    --gold:#f59e0b;
+    --blue:#3b82f6;--blue-dim:#1e3a5f;--blue-glow:rgba(59,130,246,.35);
+    --green:#22c55e;--green-dim:#052e16;--green-border:#166534;--green-glow:rgba(34,197,94,.3);
+    --red:#ef4444;--red-dim:#1c0a0a;--red-border:#7f1d1d;--red-glow:rgba(239,68,68,.3);
+    --gold:#fbbf24;--purple:#8b5cf6;
   }}
   [data-theme="light"]{{
-    --bg:#f1f5f9;--surface:#ffffff;--surface2:#ffffff;
+    --bg:#eef2f7;--surface:#ffffff;--surface2:#ffffff;
     --border:#e2e8f0;--border2:#cbd5e1;
     --text:#1e293b;--muted:#64748b;--subtle:#94a3b8;
-    --blue:#2563eb;--blue-dim:#dbeafe;
-    --green:#16a34a;--green-dim:#dcfce7;--green-border:#86efac;
-    --red:#dc2626;--red-dim:#fee2e2;--red-border:#fca5a5;
-    --gold:#d97706;
+    --blue:#2563eb;--blue-dim:#dbeafe;--blue-glow:rgba(37,99,235,.15);
+    --green:#16a34a;--green-dim:#dcfce7;--green-border:#86efac;--green-glow:rgba(22,163,74,.15);
+    --red:#dc2626;--red-dim:#fee2e2;--red-border:#fca5a5;--red-glow:rgba(220,38,38,.15);
+    --gold:#d97706;--purple:#7c3aed;
   }}
   html{{scroll-behavior:smooth}}
-  body{{font-family:'Inter',Tahoma,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;direction:rtl;transition:background .3s,color .3s}}
+  body{{font-family:'Inter',Tahoma,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;direction:rtl;transition:background .3s,color .3s;position:relative;overflow-x:hidden}}
+
+  /* ── Animated background particles ── */
+  .bg-grid{{position:fixed;inset:0;z-index:0;opacity:.4;pointer-events:none;
+    background-image:linear-gradient(var(--border) 1px,transparent 1px),linear-gradient(90deg,var(--border) 1px,transparent 1px);
+    background-size:40px 40px;mask-image:radial-gradient(ellipse 60% 50% at 50% 0%,#000 0%,transparent 100%)}}
+  .bg-orb{{position:fixed;border-radius:50%;filter:blur(80px);pointer-events:none;z-index:0;opacity:.35;animation:float 16s ease-in-out infinite}}
+  .bg-orb.o1{{width:300px;height:300px;background:var(--blue);top:-100px;right:-80px}}
+  .bg-orb.o2{{width:260px;height:260px;background:var(--purple);top:30%;left:-100px;animation-delay:-5s}}
+  .bg-orb.o3{{width:240px;height:240px;background:var(--green);bottom:0;right:10%;animation-delay:-10s}}
+  @keyframes float{{0%,100%{{transform:translate(0,0) scale(1)}}50%{{transform:translate(30px,-40px) scale(1.1)}}}}
 
   /* ── Scroll progress ── */
   .scroll-bar{{position:fixed;top:0;right:0;left:0;height:4px;background:var(--border);z-index:999;overflow:hidden}}
-  .scroll-bar-fill{{height:100%;width:0%;background:linear-gradient(90deg,var(--green),var(--blue),#8b5cf6);transition:width .08s;position:relative}}
-  .scroll-bar-fill::after{{content:'';position:absolute;left:0;top:0;bottom:0;right:0;
-    background:repeating-linear-gradient(90deg,transparent 0 6px,rgba(255,255,255,.25) 6px 8px);}}
-  .scroll-dot{{position:fixed;top:0;width:14px;height:14px;border-radius:50%;
-    background:var(--blue);box-shadow:0 0 10px var(--blue);z-index:1000;
-    transform:translate(-50%,-5px);transition:left .08s;display:flex;align-items:center;justify-content:center;font-size:8px}}
+  .scroll-bar-fill{{height:100%;width:0%;background:linear-gradient(90deg,var(--green),var(--blue),var(--purple));transition:width .08s;position:relative}}
+  .scroll-bar-fill::after{{content:'';position:absolute;inset:0;
+    background:repeating-linear-gradient(90deg,transparent 0 6px,rgba(255,255,255,.3) 6px 8px)}}
+  .scroll-dot{{position:fixed;top:0;width:16px;height:16px;border-radius:50%;
+    background:radial-gradient(circle,#fff,var(--blue));box-shadow:0 0 14px var(--blue);z-index:1000;
+    transform:translate(-50%,-6px);transition:left .08s;display:flex;align-items:center;justify-content:center;font-size:9px}}
 
   /* ── Theme toggle ── */
-  .theme-toggle{{position:fixed;top:14px;left:14px;z-index:998;width:42px;height:42px;border-radius:50%;border:1px solid var(--border2);background:var(--surface);color:var(--text);font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 10px rgba(0,0,0,.15);transition:.2s}}
-  .theme-toggle:hover{{transform:scale(1.08)}}
+  .theme-toggle{{position:fixed;top:14px;left:14px;z-index:998;width:44px;height:44px;border-radius:50%;border:1px solid var(--border2);background:var(--surface);color:var(--text);font-size:19px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(0,0,0,.25);transition:.25s}}
+  .theme-toggle:hover{{transform:scale(1.1) rotate(15deg)}}
 
   /* ── Header ── */
-  .hero{{background:linear-gradient(135deg,#0f1f3d 0%,#0a0f1e 100%);padding:36px 20px 26px;text-align:center;border-bottom:1px solid var(--border);position:relative;overflow:hidden;transition:.3s}}
-  [data-theme="light"] .hero{{background:linear-gradient(135deg,#dbeafe 0%,#eff6ff 100%)}}
-  .hero::before{{content:'';position:absolute;inset:0;background:radial-gradient(ellipse at 50% 0%,rgba(59,130,246,.18) 0%,transparent 70%);pointer-events:none}}
-  .hero h1{{font-size:23px;font-weight:700;color:var(--text);margin-bottom:6px;letter-spacing:-.3px;position:relative;animation:fadeDown .5s ease}}
-  [data-theme="dark"] .hero h1{{color:#fff}}
-  .hero .period{{font-size:13px;color:var(--muted);margin-bottom:22px;position:relative;animation:fadeDown .6s ease}}
+  .hero{{padding:42px 20px 28px;text-align:center;position:relative;z-index:1}}
+  .hero h1{{font-size:26px;font-weight:800;margin-bottom:8px;letter-spacing:-.5px;
+    background:linear-gradient(135deg,var(--blue),var(--purple));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+    animation:fadeDown .5s ease}}
+  .hero .period{{font-size:13px;color:var(--muted);margin-bottom:24px;animation:fadeDown .6s ease}}
 
   /* ── Stats bar ── */
-  .stats{{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;position:relative;animation:fadeUp .6s ease}}
-  .stat{{background:rgba(255,255,255,.06);border:1px solid var(--border);border-radius:12px;padding:10px 22px;text-align:center;min-width:80px;transition:.2s}}
-  [data-theme="light"] .stat{{background:rgba(255,255,255,.7)}}
-  .stat:hover{{transform:translateY(-2px)}}
-  .stat .num{{font-size:22px;font-weight:700;color:var(--text)}}
-  [data-theme="dark"] .stat .num{{color:#fff}}
-  .stat .lbl2{{font-size:11px;color:var(--muted);margin-top:3px}}
+  .stats{{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;animation:fadeUp .6s ease}}
+  .stat{{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:14px 26px;text-align:center;min-width:90px;transition:.25s;position:relative;overflow:hidden}}
+  .stat::before{{content:'';position:absolute;inset:0;background:linear-gradient(135deg,var(--blue-glow),transparent);opacity:0;transition:.3s}}
+  .stat:hover::before{{opacity:1}}
+  .stat:hover{{transform:translateY(-4px) scale(1.03);box-shadow:0 8px 24px var(--blue-glow)}}
+  .stat .num{{font-size:26px;font-weight:800;position:relative}}
+  .stat .lbl2{{font-size:11px;color:var(--muted);margin-top:4px;position:relative}}
   .stat.green .num{{color:var(--green)}}
   .stat.red .num{{color:var(--red)}}
+  .stat.green:hover{{box-shadow:0 8px 24px var(--green-glow)}}
+  .stat.red:hover{{box-shadow:0 8px 24px var(--red-glow)}}
 
   /* ── Week nav ── */
-  .week-nav{{display:flex;gap:8px;justify-content:center;padding:16px 20px;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:3px;z-index:50;backdrop-filter:blur(8px)}}
-  .week-btn{{padding:9px 24px;border-radius:10px;border:1px solid var(--border2);background:transparent;color:var(--muted);text-decoration:none;font-size:13px;font-weight:500;transition:.2s}}
-  .week-btn:hover{{border-color:var(--blue);color:var(--blue);transform:translateY(-1px)}}
-  .week-btn.active{{background:var(--blue);border-color:var(--blue);color:#fff;box-shadow:0 4px 14px rgba(59,130,246,.35)}}
+  .week-nav{{display:flex;gap:10px;justify-content:center;padding:18px 20px;position:sticky;top:4px;z-index:50}}
+  .week-btn{{padding:10px 26px;border-radius:12px;border:1px solid var(--border2);background:var(--surface);color:var(--muted);text-decoration:none;font-size:13px;font-weight:600;transition:.25s;backdrop-filter:blur(10px)}}
+  .week-btn:hover{{border-color:var(--blue);color:var(--blue);transform:translateY(-2px)}}
+  .week-btn.active{{background:linear-gradient(135deg,var(--blue),var(--purple));border-color:transparent;color:#fff;box-shadow:0 6px 20px var(--blue-glow)}}
 
   /* ── Cards ── */
-  .list{{padding:18px 20px 40px;max-width:640px;margin:0 auto}}
-  .card{{border-radius:16px;border:1px solid var(--border);margin-bottom:14px;overflow:hidden;transition:.25s;
-         opacity:0;transform:translateY(16px);animation:cardIn .5s ease forwards}}
-  .card:hover{{border-color:var(--blue);transform:translateY(-3px);box-shadow:0 8px 24px rgba(59,130,246,.12)}}
-  .card-active{{background:var(--surface2);border-color:var(--blue-dim)}}
-  .card-false{{background:var(--surface2);border-color:var(--red-border);opacity:0}}
-  .card-false{{animation:cardIn .5s ease forwards}}
-  [data-theme="dark"] .card-false{{background:var(--red-dim)}}
-  .card-header{{display:flex;align-items:center;justify-content:space-between;padding:15px 16px;gap:10px;
-                 background:linear-gradient(90deg,rgba(59,130,246,.06),transparent)}}
-  .card-false .card-header{{background:linear-gradient(90deg,rgba(239,68,68,.08),transparent)}}
-  .card-title{{display:flex;align-items:center;gap:10px}}
-  .tag{{font-weight:700;font-size:16px;color:var(--blue)}}
-  .sym{{font-size:12px;color:var(--muted);background:var(--bg);padding:3px 9px;border-radius:6px;border:1px solid var(--border)}}
-  .badge{{font-size:11px;font-weight:600;padding:5px 12px;border-radius:20px;white-space:nowrap}}
+  .list{{padding:10px 20px 40px;max-width:680px;margin:0 auto;position:relative;z-index:1}}
+  .card{{border-radius:20px;border:1px solid var(--border);margin-bottom:18px;overflow:hidden;transition:.3s;
+         opacity:0;transform:translateY(20px) scale(.98);animation:cardIn .5s ease forwards;
+         background:var(--surface);position:relative}}
+  .card:hover{{transform:translateY(-5px) scale(1.01);box-shadow:0 16px 40px var(--blue-glow);border-color:var(--blue)}}
+  .card-false:hover{{box-shadow:0 16px 40px var(--red-glow);border-color:var(--red)}}
+  .card-glow{{position:absolute;top:-50%;left:-20%;width:60%;height:200%;
+    background:radial-gradient(circle,var(--blue-glow),transparent 70%);pointer-events:none;opacity:.5}}
+  .card-false .card-glow{{background:radial-gradient(circle,var(--red-glow),transparent 70%)}}
+
+  .card-header{{display:flex;align-items:center;gap:12px;padding:18px 18px 14px;position:relative;z-index:1}}
+  .card-icon{{font-size:26px;width:46px;height:46px;display:flex;align-items:center;justify-content:center;
+    background:var(--surface2);border-radius:12px;border:1px solid var(--border)}}
+  .card-title{{display:flex;flex-direction:column;gap:3px;flex:1}}
+  .tag{{font-weight:800;font-size:17px;color:var(--blue)}}
+  .sym{{font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.5px}}
+  .badge{{font-size:11px;font-weight:700;padding:6px 14px;border-radius:24px;white-space:nowrap}}
   .badge-active{{background:var(--green-dim);color:var(--green);border:1px solid var(--green-border)}}
   .badge-false{{background:var(--red-dim);color:var(--red);border:1px solid var(--red-border)}}
-  .card-body{{padding:4px 16px 16px;display:flex;flex-direction:column;gap:8px}}
-  .row-info{{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)}}
-  .row-info:last-child{{border-bottom:none}}
-  .lbl{{font-size:12px;color:var(--muted)}}
-  .val{{font-size:13px;color:var(--text);font-weight:500}}
-  .val.mono{{font-family:monospace;color:var(--gold);font-size:14px;font-weight:700}}
-  .val.highlight{{color:var(--blue);font-weight:700}}
-  .false-detail{{margin-top:6px;padding:9px 12px;background:var(--red-dim);border-radius:8px;border:1px solid var(--red-border);display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;color:var(--red)}}
+
+  /* ── Side rail: timeline dot + mini candles ── */
+  .card-rail{{display:flex;align-items:center;justify-content:flex-start;gap:10px;padding:10px 18px;
+    border-top:1px solid var(--border);background:var(--surface2)}}
+  .rail-label{{font-size:11px;color:var(--muted);font-weight:600;margin-right:auto}}
+  .rail-dot{{width:10px;height:10px;border-radius:50%;flex-shrink:0;box-shadow:0 0 8px currentColor}}
+  .rail-dot.candle-up{{background:var(--green);color:var(--green)}}
+  .rail-dot.candle-down{{background:var(--red);color:var(--red)}}
+  .mini-candles{{display:flex;align-items:flex-end;gap:3px;height:26px}}
+  .mc{{width:4px;border-radius:2px;opacity:.55;transition:.3s}}
+  .mc.candle-up{{background:var(--green)}}
+  .mc.candle-down{{background:var(--red)}}
+  .card:hover .mc{{opacity:1;transform:scaleY(1.15)}}
+
+  /* ── Target highlight bar ── */
+  .card-target{{display:flex;justify-content:space-between;align-items:center;
+    margin:0 18px 14px;padding:14px 18px;border-radius:14px;
+    background:linear-gradient(135deg,var(--blue-dim),transparent);
+    border:1px solid var(--border);position:relative;overflow:hidden}}
+  .card-false .card-target{{background:linear-gradient(135deg,var(--red-dim),transparent)}}
+  .target-lbl{{font-size:12px;color:var(--muted);font-weight:600}}
+  .target-val{{font-family:'Inter',monospace;font-size:20px;font-weight:800;color:var(--gold);letter-spacing:.5px}}
+
+  .card-body{{padding:0 18px 18px;position:relative;z-index:1}}
+  .info-grid{{display:grid;grid-template-columns:1fr 1fr;gap:10px}}
+  .info-cell{{display:flex;flex-direction:column;gap:4px;padding:10px 12px;background:var(--surface2);border-radius:10px;border:1px solid var(--border)}}
+  .lbl{{font-size:11px;color:var(--muted);font-weight:500}}
+  .val{{font-size:13px;color:var(--text);font-weight:600}}
+  .val.highlight{{color:var(--blue);font-weight:800}}
+  .false-detail{{margin-top:10px;padding:10px 14px;background:var(--red-dim);border-radius:10px;border:1px solid var(--red-border);display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;color:var(--red);font-weight:500}}
   .false-detail .reason{{font-style:italic}}
 
   /* ── Empty ── */
-  .empty{{text-align:center;padding:80px 20px;color:var(--muted);animation:fadeUp .5s ease}}
-  .empty .icon{{font-size:48px;margin-bottom:12px}}
+  .empty{{text-align:center;padding:90px 20px;color:var(--muted);animation:fadeUp .5s ease;position:relative;z-index:1}}
+  .empty .icon{{font-size:54px;margin-bottom:14px}}
 
   /* ── Footer ── */
-  .footer{{text-align:center;padding:24px;font-size:11px;color:var(--subtle)}}
+  .footer{{text-align:center;padding:28px;font-size:11px;color:var(--subtle);position:relative;z-index:1}}
 
   /* ── Animations ── */
-  @keyframes fadeDown{{from{{opacity:0;transform:translateY(-10px)}}to{{opacity:1;transform:translateY(0)}}}}
-  @keyframes fadeUp{{from{{opacity:0;transform:translateY(10px)}}to{{opacity:1;transform:translateY(0)}}}}
-  @keyframes cardIn{{to{{opacity:1;transform:translateY(0)}}}}
+  @keyframes fadeDown{{from{{opacity:0;transform:translateY(-12px)}}to{{opacity:1;transform:translateY(0)}}}}
+  @keyframes fadeUp{{from{{opacity:0;transform:translateY(12px)}}to{{opacity:1;transform:translateY(0)}}}}
+  @keyframes cardIn{{to{{opacity:1;transform:translateY(0) scale(1)}}}}
 </style>
 </head>
 <body data-theme="dark">
+<div class="bg-grid"></div>
+<div class="bg-orb o1"></div>
+<div class="bg-orb o2"></div>
+<div class="bg-orb o3"></div>
 <div class="scroll-bar"><div class="scroll-bar-fill" id="scrollFill"></div></div>
 <div class="scroll-dot" id="scrollDot">📈</div>
 <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()">🌙</button>
