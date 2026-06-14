@@ -2777,29 +2777,17 @@ def _do_update(upd, token):
                         wr_page = max(0, min(wr_page, total_pages - 1))
                         page_rows = rows_wr[wr_page * PER_PAGE:(wr_page + 1) * PER_PAGE]
 
-                        # دکمه‌های ناوبری — فقط صفحه اول انتخاب هفته داره
+                        # فقط صفحه‌بندی و بستن
                         kb_wr_nav = []
-                        if wr_page == 0:
-                            nav_row = [
-                                {"text": "📅 این هفته" + (" ✓" if wr_which=="this" else ""), "callback_data": f"weekly_report:{cbq_cid_wr}:this:0"},
-                                {"text": "📅 هفته قبل" + (" ✓" if wr_which=="last" else ""), "callback_data": f"weekly_report:{cbq_cid_wr}:last:0"}
-                            ]
-                            kb_wr_nav.append(nav_row)
                         if total_pages > 1:
                             page_row = []
                             if wr_page > 0:
                                 page_row.append({"text": "‹ قبلی", "callback_data": f"weekly_report:{cbq_cid_wr}:{wr_which}:{wr_page-1}"})
-                            page_row.append({"text": f"صفحه {wr_page+1}/{total_pages}", "callback_data": "noop"})
+                            page_row.append({"text": f"{wr_page+1}/{total_pages}", "callback_data": "noop"})
                             if wr_page < total_pages - 1:
                                 page_row.append({"text": "بعدی ›", "callback_data": f"weekly_report:{cbq_cid_wr}:{wr_which}:{wr_page+1}"})
                             kb_wr_nav.append(page_row)
-                        action_row = [
-                            {"text": "🔄", "callback_data": f"weekly_report:{cbq_cid_wr}:{wr_which}:{wr_page}"},
-                            {"text": "✕ بستن", "callback_data": f"weekly_report_close:{cbq_cid_wr}"}
-                        ]
-                        kb_wr_nav.append(action_row)
-                        if APP_BASE_URL:
-                            kb_wr_nav.append([{"text": "🌐 نسخه وب", "url": f"{APP_BASE_URL}/report/weekly?w={wr_which}"}])
+                        kb_wr_nav.append([{"text": "✕ بستن", "callback_data": f"weekly_report_close:{cbq_cid_wr}"}])
 
                         if not rows_wr:
                             edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
@@ -3413,8 +3401,9 @@ def _do_update(upd, token):
                     status_kb.append([{"text": "✏️ ویرایش اسم", "callback_data": f"edit_name:{cid}"}])
                     status_kb.append([{"text": "📡 سیگنال‌های من", "callback_data": f"signals_view:{cid}:mine"},
                                       {"text": "📊 همه سیگنال‌ها", "callback_data": f"signals_view:{cid}:all"}])
-                    status_kb.append([{"text": "🎯 لیست تریگر", "callback_data": f"trigger_list:{cid}"},
-                                      {"text": "📋 گزارش هفتگی", "callback_data": f"weekly_report:{cid}:this:0"}])
+                    status_kb.append([{"text": "🎯 لیست تریگر", "callback_data": f"trigger_list:{cid}"}])
+                    status_kb.append([{"text": "📅 این هفته", "callback_data": f"weekly_report:{cid}:this:0"},
+                                      {"text": "📅 هفته قبل", "callback_data": f"weekly_report:{cid}:last:0"}])
                     status_kb.append([{"text": "🔔 نمایش آلارم‌های فعال", "callback_data": f"resend_active:{cid}"}])
                     send_tg_keyboard(token, cid, status_text, status_kb)
 
@@ -6946,7 +6935,7 @@ def report_weekly_html():
         if not is_active:
             false_detail = f'<div class="false-detail"><span>🕐 {false_at}</span>{("<span class=reason>"+false_rsn+"</span>") if false_rsn else ""}</div>'
         rows_html += f"""
-        <div class="card card-{status_cls}" onclick="this.classList.toggle('open')">
+        <div class="card card-{status_cls}">
           <div class="card-header">
             <div class="card-title">
               <span class="tag">{tag}</span>
@@ -6984,60 +6973,94 @@ def report_weekly_html():
     --red:#ef4444;--red-dim:#1c0a0a;--red-border:#7f1d1d;
     --gold:#f59e0b;
   }}
-  body{{font-family:'Inter',Tahoma,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;direction:rtl}}
-  
+  [data-theme="light"]{{
+    --bg:#f1f5f9;--surface:#ffffff;--surface2:#ffffff;
+    --border:#e2e8f0;--border2:#cbd5e1;
+    --text:#1e293b;--muted:#64748b;--subtle:#94a3b8;
+    --blue:#2563eb;--blue-dim:#dbeafe;
+    --green:#16a34a;--green-dim:#dcfce7;--green-border:#86efac;
+    --red:#dc2626;--red-dim:#fee2e2;--red-border:#fca5a5;
+    --gold:#d97706;
+  }}
+  html{{scroll-behavior:smooth}}
+  body{{font-family:'Inter',Tahoma,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;direction:rtl;transition:background .3s,color .3s}}
+
+  /* ── Scroll progress ── */
+  .scroll-bar{{position:fixed;top:0;right:0;left:0;height:3px;background:linear-gradient(90deg,var(--blue),#8b5cf6);z-index:999;width:0%;transition:width .1s}}
+
+  /* ── Theme toggle ── */
+  .theme-toggle{{position:fixed;top:14px;left:14px;z-index:998;width:42px;height:42px;border-radius:50%;border:1px solid var(--border2);background:var(--surface);color:var(--text);font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 10px rgba(0,0,0,.15);transition:.2s}}
+  .theme-toggle:hover{{transform:scale(1.08)}}
+
   /* ── Header ── */
-  .hero{{background:linear-gradient(135deg,#0f1f3d 0%,#0a0f1e 100%);padding:32px 20px 24px;text-align:center;border-bottom:1px solid var(--border);position:relative;overflow:hidden}}
-  .hero::before{{content:'';position:absolute;inset:0;background:radial-gradient(ellipse at 50% 0%,rgba(59,130,246,.15) 0%,transparent 70%);pointer-events:none}}
-  .hero h1{{font-size:22px;font-weight:700;color:#fff;margin-bottom:6px;letter-spacing:-.3px}}
-  .hero .period{{font-size:13px;color:var(--muted);margin-bottom:20px}}
-  
+  .hero{{background:linear-gradient(135deg,#0f1f3d 0%,#0a0f1e 100%);padding:36px 20px 26px;text-align:center;border-bottom:1px solid var(--border);position:relative;overflow:hidden;transition:.3s}}
+  [data-theme="light"] .hero{{background:linear-gradient(135deg,#dbeafe 0%,#eff6ff 100%)}}
+  .hero::before{{content:'';position:absolute;inset:0;background:radial-gradient(ellipse at 50% 0%,rgba(59,130,246,.18) 0%,transparent 70%);pointer-events:none}}
+  .hero h1{{font-size:23px;font-weight:700;color:var(--text);margin-bottom:6px;letter-spacing:-.3px;position:relative;animation:fadeDown .5s ease}}
+  [data-theme="dark"] .hero h1{{color:#fff}}
+  .hero .period{{font-size:13px;color:var(--muted);margin-bottom:22px;position:relative;animation:fadeDown .6s ease}}
+
   /* ── Stats bar ── */
-  .stats{{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}}
-  .stat{{background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:10px;padding:8px 18px;text-align:center}}
-  .stat .num{{font-size:20px;font-weight:700;color:#fff}}
-  .stat .lbl2{{font-size:11px;color:var(--muted);margin-top:2px}}
+  .stats{{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;position:relative;animation:fadeUp .6s ease}}
+  .stat{{background:rgba(255,255,255,.06);border:1px solid var(--border);border-radius:12px;padding:10px 22px;text-align:center;min-width:80px;transition:.2s}}
+  [data-theme="light"] .stat{{background:rgba(255,255,255,.7)}}
+  .stat:hover{{transform:translateY(-2px)}}
+  .stat .num{{font-size:22px;font-weight:700;color:var(--text)}}
+  [data-theme="dark"] .stat .num{{color:#fff}}
+  .stat .lbl2{{font-size:11px;color:var(--muted);margin-top:3px}}
   .stat.green .num{{color:var(--green)}}
   .stat.red .num{{color:var(--red)}}
 
   /* ── Week nav ── */
-  .week-nav{{display:flex;gap:8px;justify-content:center;padding:16px 20px;background:var(--surface);border-bottom:1px solid var(--border)}}
-  .week-btn{{padding:8px 22px;border-radius:8px;border:1px solid var(--border2);background:transparent;color:var(--muted);text-decoration:none;font-size:13px;font-weight:500;transition:.2s}}
-  .week-btn:hover{{border-color:var(--blue);color:var(--blue)}}
-  .week-btn.active{{background:var(--blue);border-color:var(--blue);color:#fff}}
+  .week-nav{{display:flex;gap:8px;justify-content:center;padding:16px 20px;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:3px;z-index:50;backdrop-filter:blur(8px)}}
+  .week-btn{{padding:9px 24px;border-radius:10px;border:1px solid var(--border2);background:transparent;color:var(--muted);text-decoration:none;font-size:13px;font-weight:500;transition:.2s}}
+  .week-btn:hover{{border-color:var(--blue);color:var(--blue);transform:translateY(-1px)}}
+  .week-btn.active{{background:var(--blue);border-color:var(--blue);color:#fff;box-shadow:0 4px 14px rgba(59,130,246,.35)}}
 
   /* ── Cards ── */
-  .list{{padding:16px 20px;max-width:640px;margin:0 auto}}
-  .card{{border-radius:14px;border:1px solid var(--border);margin-bottom:12px;overflow:hidden;transition:.2s;cursor:pointer}}
-  .card:hover{{border-color:var(--border2);transform:translateY(-1px)}}
+  .list{{padding:18px 20px 40px;max-width:640px;margin:0 auto}}
+  .card{{border-radius:16px;border:1px solid var(--border);margin-bottom:14px;overflow:hidden;transition:.25s;
+         opacity:0;transform:translateY(16px);animation:cardIn .5s ease forwards}}
+  .card:hover{{border-color:var(--blue);transform:translateY(-3px);box-shadow:0 8px 24px rgba(59,130,246,.12)}}
   .card-active{{background:var(--surface2);border-color:var(--blue-dim)}}
-  .card-false{{background:var(--red-dim);border-color:var(--red-border);opacity:.8}}
-  .card-header{{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;gap:10px}}
+  .card-false{{background:var(--surface2);border-color:var(--red-border);opacity:0}}
+  .card-false{{animation:cardIn .5s ease forwards}}
+  [data-theme="dark"] .card-false{{background:var(--red-dim)}}
+  .card-header{{display:flex;align-items:center;justify-content:space-between;padding:15px 16px;gap:10px;
+                 background:linear-gradient(90deg,rgba(59,130,246,.06),transparent)}}
+  .card-false .card-header{{background:linear-gradient(90deg,rgba(239,68,68,.08),transparent)}}
   .card-title{{display:flex;align-items:center;gap:10px}}
-  .tag{{font-weight:700;font-size:15px;color:var(--blue)}}
-  .sym{{font-size:12px;color:var(--muted);background:var(--surface);padding:2px 8px;border-radius:6px;border:1px solid var(--border)}}
-  .badge{{font-size:11px;font-weight:600;padding:4px 10px;border-radius:20px;white-space:nowrap}}
+  .tag{{font-weight:700;font-size:16px;color:var(--blue)}}
+  .sym{{font-size:12px;color:var(--muted);background:var(--bg);padding:3px 9px;border-radius:6px;border:1px solid var(--border)}}
+  .badge{{font-size:11px;font-weight:600;padding:5px 12px;border-radius:20px;white-space:nowrap}}
   .badge-active{{background:var(--green-dim);color:var(--green);border:1px solid var(--green-border)}}
   .badge-false{{background:var(--red-dim);color:var(--red);border:1px solid var(--red-border)}}
-  .card-body{{padding:0 16px 14px;display:flex;flex-direction:column;gap:7px}}
-  .row-info{{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.04)}}
+  .card-body{{padding:4px 16px 16px;display:flex;flex-direction:column;gap:8px}}
+  .row-info{{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)}}
   .row-info:last-child{{border-bottom:none}}
   .lbl{{font-size:12px;color:var(--muted)}}
   .val{{font-size:13px;color:var(--text);font-weight:500}}
-  .val.mono{{font-family:monospace;color:var(--gold);font-size:14px}}
-  .val.highlight{{color:var(--blue);font-weight:600}}
-  .false-detail{{margin-top:8px;padding:8px 12px;background:rgba(239,68,68,.08);border-radius:8px;border:1px solid var(--red-border);display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;color:#f87171}}
-  .false-detail .reason{{color:#fca5a5;font-style:italic}}
+  .val.mono{{font-family:monospace;color:var(--gold);font-size:14px;font-weight:700}}
+  .val.highlight{{color:var(--blue);font-weight:700}}
+  .false-detail{{margin-top:6px;padding:9px 12px;background:var(--red-dim);border-radius:8px;border:1px solid var(--red-border);display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;color:var(--red)}}
+  .false-detail .reason{{font-style:italic}}
 
   /* ── Empty ── */
-  .empty{{text-align:center;padding:80px 20px;color:var(--muted)}}
+  .empty{{text-align:center;padding:80px 20px;color:var(--muted);animation:fadeUp .5s ease}}
   .empty .icon{{font-size:48px;margin-bottom:12px}}
 
   /* ── Footer ── */
-  .footer{{text-align:center;padding:20px;font-size:11px;color:var(--subtle)}}
+  .footer{{text-align:center;padding:24px;font-size:11px;color:var(--subtle)}}
+
+  /* ── Animations ── */
+  @keyframes fadeDown{{from{{opacity:0;transform:translateY(-10px)}}to{{opacity:1;transform:translateY(0)}}}}
+  @keyframes fadeUp{{from{{opacity:0;transform:translateY(10px)}}to{{opacity:1;transform:translateY(0)}}}}
+  @keyframes cardIn{{to{{opacity:1;transform:translateY(0)}}}}
 </style>
 </head>
-<body>
+<body data-theme="dark">
+<div class="scroll-bar" id="scrollBar"></div>
+<button class="theme-toggle" id="themeToggle" onclick="toggleTheme()">🌙</button>
 <div class="hero">
   <h1>📋 گزارش هفتگی تیم</h1>
   <div class="period">{week_label}</div>
@@ -7055,6 +7078,33 @@ def report_weekly_html():
   {'<div class="empty"><div class="icon">📭</div>آلارمی ثبت نشده</div>' if not rows else rows_html}
 </div>
 <div class="footer">آخرین بروزرسانی: {now_dt.strftime('%H:%M — %d/%m/%Y')}</div>
+<script>
+  // scroll progress bar
+  window.addEventListener('scroll', () => {{
+    const h = document.documentElement;
+    const pct = (h.scrollTop / (h.scrollHeight - h.clientHeight)) * 100;
+    document.getElementById('scrollBar').style.width = pct + '%';
+  }});
+  // stagger card animations
+  document.querySelectorAll('.card').forEach((c,i) => {{
+    c.style.animationDelay = (i * 0.06) + 's';
+  }});
+  // theme toggle with localStorage
+  function toggleTheme() {{
+    const body = document.body;
+    const isDark = body.getAttribute('data-theme') === 'dark';
+    body.setAttribute('data-theme', isDark ? 'light' : 'dark');
+    document.getElementById('themeToggle').textContent = isDark ? '☀️' : '🌙';
+    try {{ localStorage.setItem('reportTheme', isDark ? 'light' : 'dark'); }} catch(e) {{}}
+  }}
+  try {{
+    const saved = localStorage.getItem('reportTheme');
+    if (saved) {{
+      document.body.setAttribute('data-theme', saved);
+      document.getElementById('themeToggle').textContent = saved === 'dark' ? '🌙' : '☀️';
+    }}
+  }} catch(e) {{}}
+</script>
 </body></html>"""
     return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
