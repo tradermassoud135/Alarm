@@ -728,10 +728,36 @@ def _sb_update_shift(alarm_id: str, new_shift: str):
         print(f"[assign] update_shift exc: {e}")
 
 def _sb_false_assignment(alarm_id: str, false_by: str, reason: str = ""):
-    """وقتی /False زده میشه — assignment رو غیرفعال کن"""
+    """
+    وقتی /False زده میشه — assignment رو غیرفعال کن.
+    اگه قبلاً false شده بود، یه ردیف history جدید append کن (به جای overwrite).
+    """
     if not SUPABASE_KEY: return
     try:
-        payload = {"is_active": False, "false_at": now_teh(), "false_by": false_by}
+        # خوندن وضعیت فعلی برای گرفتن history قبلی
+        r_get = requests.get(
+            f"{SUPABASE_URL}/rest/v1/alarm_assignments?id=eq.{alarm_id}&select=is_active,false_history",
+            headers=_sb_h(), timeout=8)
+        prev_history = []
+        already_false = False
+        if r_get.status_code == 200:
+            rows = r_get.json()
+            if rows:
+                already_false = (rows[0].get("is_active") == False)
+                prev_history = rows[0].get("false_history") or []
+                if isinstance(prev_history, str):
+                    try: prev_history = json.loads(prev_history)
+                    except: prev_history = []
+
+        new_entry = {"by": false_by, "at": now_teh(), "reason": reason}
+        prev_history.append(new_entry)
+
+        payload = {
+            "is_active": False,
+            "false_at": now_teh(),
+            "false_by": false_by,
+            "false_history": prev_history
+        }
         if reason:
             payload["false_reason"] = reason
         r = requests.patch(
@@ -740,8 +766,10 @@ def _sb_false_assignment(alarm_id: str, false_by: str, reason: str = ""):
             json=payload, timeout=8)
         if r.status_code not in (200, 204):
             print(f"[assign] false error: {r.status_code} {r.text[:80]}")
+        return already_false  # True اگه قبلاً false شده بود (یعنی این آپدیته)
     except Exception as e:
         print(f"[assign] false exc: {e}")
+        return False
 
 def _sb_load_active_assignments():
     """لود همه assignment‌های فعال از Supabase"""
@@ -1672,6 +1700,8 @@ _pending_name  = {}  # cid → True
 _pending_alarm = {}  # cid → {"step": str, "data": dict}
 _pending_reminder = {}  # cid → {step, bot_msg_id}
 _pending_weekly_search = {}  # cid → {"which": str, "msg_id": int}
+# آلارم_آیدی → {chat_id: message_id آخرین پیام False/آپدیت}
+_false_broadcast_ids: dict = {}
 
 # ── Reply Keyboard rows ──────────────────────────────────────
 MAIN_MENU = [
@@ -3433,6 +3463,21 @@ def _do_update(upd, token):
                                 break
                     if target_aid_false:
                         sender_name_false = _get_user_custom_name(cid) or uname
+
+                        # چک کن این آلارم قبلاً false شده یا نه (sync — قبل از ارسال پیام)
+                        already_false = False
+                        if SUPABASE_KEY:
+                            try:
+                                r_chk = requests.get(
+                                    f"{SUPABASE_URL}/rest/v1/alarm_assignments?id=eq.{target_aid_false}&select=is_active",
+                                    headers=_sb_h(), timeout=8)
+                                if r_chk.status_code == 200:
+                                    chk_rows = r_chk.json()
+                                    if chk_rows:
+                                        already_false = (chk_rows[0].get("is_active") == False)
+                            except Exception as e:
+                                print(f"[false] check exc: {e}")
+
                         threading.Thread(
                             target=_sb_false_assignment,
                             args=(target_aid_false, sender_name_false, false_reason),
@@ -3441,21 +3486,75 @@ def _do_update(upd, token):
                             _sb_load_active_assignments()), daemon=True).start()
                         tag_txt = f" <b>{false_tag}</b>" if false_tag else ""
                         reason_line = f"\n📝 علت: {false_reason}" if false_reason else ""
-                        false_broadcast = (
-                            f"❌ آلارم{tag_txt} از لیست تریگر خارج شد\n"
-                            f"👤 توسط: <b>{sender_name_false}</b>"
-                            f"{reason_line}"
-                        )
+                        now_label = now_pretty()
+
                         false_cid_map = _fired_msg_ids.get(target_aid_false, {})
-                        for tc, tm in false_cid_map.items():
-                            if tc in ("__tag__", "__text__"): continue
+                        prev_broadcast_map = _false_broadcast_ids.get(target_aid_false, {})
+                        if not prev_broadcast_map and already_false and SUPABASE_KEY:
                             try:
-                                requests.post(
-                                    f"https://api.telegram.org/bot{token}/sendMessage",
-                                    json={"chat_id": tc, "text": false_broadcast,
-                                          "parse_mode": "HTML", "reply_to_message_id": tm},
-                                    timeout=8, headers=H)
-                            except: pass
+                                r_bm = requests.get(
+                                    f"{SUPABASE_URL}/rest/v1/alarm_assignments?id=eq.{target_aid_false}&select=false_broadcast_map",
+                                    headers=_sb_h(), timeout=8)
+                                if r_bm.status_code == 200:
+                                    bm_rows = r_bm.json()
+                                    if bm_rows and bm_rows[0].get("false_broadcast_map"):
+                                        prev_broadcast_map = bm_rows[0]["false_broadcast_map"]
+                                        if isinstance(prev_broadcast_map, str):
+                                            prev_broadcast_map = json.loads(prev_broadcast_map)
+                            except Exception as e:
+                                print(f"[false] load broadcast_map exc: {e}")
+                        new_broadcast_map = {}
+
+                        if already_false and prev_broadcast_map:
+                            # ── آپدیت — ریپلای روی پیام False قبلی، متن قبلی حذف نمیشه
+                            update_msg = (
+                                f"🔄 <b>آپدیت</b> — {now_label}\n"
+                                f"👤 توسط: <b>{sender_name_false}</b>"
+                                f"{reason_line}"
+                            )
+                            for tc, tm in false_cid_map.items():
+                                if tc in ("__tag__", "__text__"): continue
+                                reply_target = prev_broadcast_map.get(tc, tm)
+                                try:
+                                    r_send = requests.post(
+                                        f"https://api.telegram.org/bot{token}/sendMessage",
+                                        json={"chat_id": tc, "text": update_msg,
+                                              "parse_mode": "HTML", "reply_to_message_id": reply_target},
+                                        timeout=8, headers=H)
+                                    if r_send.status_code == 200:
+                                        new_mid = r_send.json().get("result", {}).get("message_id")
+                                        if new_mid:
+                                            new_broadcast_map[tc] = new_mid
+                                except: pass
+                        else:
+                            # ── اولین بار false میشه
+                            false_broadcast = (
+                                f"❌ آلارم{tag_txt} از لیست تریگر خارج شد\n"
+                                f"👤 توسط: <b>{sender_name_false}</b>"
+                                f"{reason_line}"
+                            )
+                            for tc, tm in false_cid_map.items():
+                                if tc in ("__tag__", "__text__"): continue
+                                try:
+                                    r_send = requests.post(
+                                        f"https://api.telegram.org/bot{token}/sendMessage",
+                                        json={"chat_id": tc, "text": false_broadcast,
+                                              "parse_mode": "HTML", "reply_to_message_id": tm},
+                                        timeout=8, headers=H)
+                                    if r_send.status_code == 200:
+                                        new_mid = r_send.json().get("result", {}).get("message_id")
+                                        if new_mid:
+                                            new_broadcast_map[tc] = new_mid
+                                except: pass
+
+                        if new_broadcast_map:
+                            _false_broadcast_ids[target_aid_false] = new_broadcast_map
+                            threading.Thread(
+                                target=lambda aid=target_aid_false, m=new_broadcast_map: requests.patch(
+                                    f"{SUPABASE_URL}/rest/v1/alarm_assignments?id=eq.{aid}",
+                                    headers={**_sb_h(), "Prefer": "return=minimal"},
+                                    json={"false_broadcast_map": m}, timeout=8) if SUPABASE_KEY else None,
+                                daemon=True).start()
                     else:
                         send_tg(token, cid, "⚠️ روی پیام آلارم ریپلای بزن و /False بنویس.")
 
