@@ -2413,10 +2413,163 @@ def _do_update(upd, token):
                                 [{"text": "✉️ پیام به گروه",     "callback_data": "admin:broadcast"}],
                                 [{"text": "👥 لیست کاربران",      "callback_data": "admin:users"}],
                                 [{"text": "🗑 مدیریت سیگنال‌ها", "callback_data": "admin_sig:list:1"}],
+                                [{"text": "📋 تعیین شیفت",        "callback_data": "admin:shift:1"}],
                                 [{"text": "✕ بستن",               "callback_data": "close_myalerts"}],
                             ]
                             edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
                                 "⚙️ <b>پنل ادمین</b>\n\nیه گزینه انتخاب کن:", admin_kb_b)
+
+                    # ─── مدیریت شیفت (تعیین/جابجایی مسئول آلارم) ──────────────────
+                    elif cbq_data.startswith("admin:shift"):
+                        if cbq_cid != YOUR_CHAT_ID:
+                            answer_callback(token_cbq, cbq_id, "⛔ فقط ادمین")
+                        else:
+                            parts_sh = cbq_data.split(":")
+                            sh_action = parts_sh[2] if len(parts_sh) > 2 else "1"
+
+                            def _admin_shift_back_kb():
+                                return [
+                                    [{"text": "📋 تعیین شیفت", "callback_data": "admin:shift:1"}],
+                                    [{"text": "↩️ پنل ادمین",  "callback_data": "admin_sig:back"}],
+                                ]
+
+                            # ── لیست آلارم‌های فعال (صفحه‌بندی ۵تایی) ──
+                            if sh_action.isdigit():
+                                answer_callback(token_cbq, cbq_id, "⏳ بارگذاری...")
+                                sh_page = int(sh_action)
+                                sh_rows = _sb_load_active_assignments()
+                                PER_PAGE_SH = 5
+                                total_sh = len(sh_rows)
+                                if total_sh == 0:
+                                    edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                                        "📭 <b>هیچ آلارم فعالی برای تعیین شیفت نیست.</b>",
+                                        [[{"text": "↩️ پنل ادمین", "callback_data": "admin_sig:back"}]])
+                                else:
+                                    start_sh = (sh_page - 1) * PER_PAGE_SH
+                                    page_rows = sh_rows[start_sh: start_sh + PER_PAGE_SH]
+                                    lines_sh = [f"📋 <b>آلارم‌های فعال</b>  ({total_sh} عدد)\n"]
+                                    kb_sh = []
+                                    for row_sh in page_rows:
+                                        tag_sh   = row_sh.get("alarm_tag", "")
+                                        asn_sh   = row_sh.get("assigned_to") or "—"
+                                        sym_sh   = row_sh.get("symbol", "")
+                                        shift_sh = row_sh.get("shift", "")
+                                        lines_sh.append(
+                                            f"• {tag_sh}  <code>{sym_sh}</code>\n"
+                                            f"  👤 {asn_sh}  |  🕐 {shift_sh}"
+                                        )
+                                        aid_sh = row_sh.get("id","")
+                                        kb_sh.append([{"text": f"🔀 {tag_sh} ({asn_sh})",
+                                                        "callback_data": f"admin:shift:assign:{aid_sh}:{sh_page}"}])
+                                    # ناوبری صفحه
+                                    nav_sh = []
+                                    if sh_page > 1:
+                                        nav_sh.append({"text": "◀️ قبل", "callback_data": f"admin:shift:{sh_page-1}"})
+                                    if start_sh + PER_PAGE_SH < total_sh:
+                                        nav_sh.append({"text": "بعد ▶️", "callback_data": f"admin:shift:{sh_page+1}"})
+                                    if nav_sh:
+                                        kb_sh.append(nav_sh)
+                                    kb_sh.append([{"text": "🔄 اجرای دستی تقسیم الان",
+                                                    "callback_data": "admin:shift:run_now"}])
+                                    kb_sh.append([{"text": "↩️ پنل ادمین", "callback_data": "admin_sig:back"}])
+                                    edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                                        "\n".join(lines_sh), kb_sh)
+
+                            # ── اجرای دستی تقسیم الان ──
+                            elif sh_action == "run_now":
+                                answer_callback(token_cbq, cbq_id, "⏳ در حال تقسیم...")
+                                def _do_run_now(tok=token_cbq, c=cbq_cid, mid=cbq_msg_id):
+                                    sh_now = _get_current_shift()
+                                    if sh_now == "morning":
+                                        rows_n = _sb_load_pending_shifts(["night","evening_handover","weekend_pending","evening"])
+                                        members_n = SHIFT_MORNING["members"]
+                                        label_n = "تقسیم دستی — شیفت صبح"
+                                    elif sh_now == "evening":
+                                        rows_n = _sb_load_pending_shifts(["morning","morning_handover"])
+                                        members_n = SHIFT_EVENING["members"]
+                                        label_n = "تقسیم دستی — شیفت عصر"
+                                    else:
+                                        rows_n = []
+                                        members_n = []
+                                        label_n = "شب/آخر هفته"
+                                    if rows_n and members_n:
+                                        _send_handover_replies(rows_n, members_n, label_n)
+                                        result_txt = f"✅ <b>{len(rows_n)} آلارم تقسیم شد</b>\nشیفت: {sh_now}"
+                                    else:
+                                        result_txt = f"⚠️ آلارم باز برای تقسیم نبود\nشیفت فعلی: {sh_now}"
+                                    edit_tg_keyboard(tok, c, mid, result_txt,
+                                        [[{"text": "📋 برگشت به لیست", "callback_data": "admin:shift:1"}],
+                                         [{"text": "↩️ پنل ادمین",    "callback_data": "admin_sig:back"}]])
+                                threading.Thread(target=_do_run_now, daemon=True).start()
+
+                            # ── انتخاب آلارم برای reassign — نشون دادن لیست اعضا ──
+                            elif sh_action == "assign" and len(parts_sh) >= 5:
+                                answer_callback(token_cbq, cbq_id)
+                                aid_asgn  = parts_sh[3]
+                                page_asgn = parts_sh[4]
+                                # همه اعضا برای انتخاب
+                                all_members = SHIFT_MORNING["members"] + SHIFT_EVENING["members"]
+                                kb_asgn = []
+                                for m in all_members:
+                                    kb_asgn.append([{"text": f"👤 {m}",
+                                                      "callback_data": f"admin:shift:do:{aid_asgn}:{m}:{page_asgn}"}])
+                                kb_asgn.append([{"text": "↩️ برگشت به لیست",
+                                                  "callback_data": f"admin:shift:{page_asgn}"}])
+                                edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id,
+                                    f"👤 <b>انتخاب مسئول جدید</b>\n\n<code>{aid_asgn}</code>\n\nکدوم نفر؟",
+                                    kb_asgn)
+
+                            # ── تایید reassign — ذخیره در Supabase ──
+                            elif sh_action == "do" and len(parts_sh) >= 6:
+                                answer_callback(token_cbq, cbq_id, "✅ در حال جابجایی...")
+                                aid_do    = parts_sh[3]
+                                new_asn   = parts_sh[4]
+                                page_do   = parts_sh[5]
+                                def _do_reassign(aid=aid_do, asn=new_asn, tok=token_cbq,
+                                                  c=cbq_cid, mid=cbq_msg_id, pg=page_do):
+                                    # خوندن اطلاعات آلارم
+                                    try:
+                                        r_get = requests.get(
+                                            f"{SUPABASE_URL}/rest/v1/alarm_assignments?id=eq.{aid}&select=*",
+                                            headers=_sb_h(), timeout=8)
+                                        row_d = r_get.json()[0] if r_get.status_code == 200 and r_get.json() else {}
+                                    except:
+                                        row_d = {}
+                                    old_asn = row_d.get("assigned_to","")
+                                    tag_d   = row_d.get("alarm_tag","")
+                                    # آپدیت شمارش حافظه
+                                    if old_asn and old_asn in _active_assign_count:
+                                        _active_assign_count[old_asn] = max(0, _active_assign_count[old_asn] - 1)
+                                    _active_assign_count[asn] = _active_assign_count.get(asn, 0) + 1
+                                    # ذخیره در Supabase
+                                    sh_cur = _get_current_shift() or row_d.get("shift","morning")
+                                    requests.patch(
+                                        f"{SUPABASE_URL}/rest/v1/alarm_assignments?id=eq.{aid}",
+                                        headers={**_sb_h(), "Prefer": "return=minimal"},
+                                        json={"assigned_to": asn, "shift": sh_cur},
+                                        timeout=8)
+                                    # ارسال reply به گروه
+                                    tg_tok, cids_d, _ = _get_token_and_cids()
+                                    msg_map_d = _fired_msg_ids.get(aid, {})
+                                    reply_d = (f"🔀 <b>جابجایی دستی</b>\n\n"
+                                               f"{tag_d}\n"
+                                               f"👤 مسئول جدید: <b>{asn}</b>"
+                                               + (f"\n↩️ قبلی: {old_asn}" if old_asn else ""))
+                                    for tc_d, tm_d in msg_map_d.items():
+                                        if tc_d in ("__tag__","__text__"): continue
+                                        try:
+                                            requests.post(
+                                                f"https://api.telegram.org/bot{tg_tok}/sendMessage",
+                                                json={"chat_id": tc_d, "text": reply_d,
+                                                      "parse_mode": "HTML",
+                                                      "reply_to_message_id": tm_d},
+                                                timeout=8, headers=H)
+                                        except: pass
+                                    edit_tg_keyboard(tok, c, mid,
+                                        f"✅ <b>جابجایی انجام شد</b>\n\n{tag_d}\n👤 {asn}",
+                                        [[{"text": "📋 برگشت به لیست", "callback_data": f"admin:shift:{pg}"}],
+                                         [{"text": "↩️ پنل ادمین",    "callback_data": "admin_sig:back"}]])
+                                threading.Thread(target=_do_reassign, daemon=True).start()
 
                     elif cbq_data.startswith("clean_chat:"):
                         answer_callback(token_cbq, cbq_id, "🧹 در حال پاک‌سازی...")
@@ -2877,9 +3030,24 @@ def _do_update(upd, token):
                                 if is_active_wr:
                                     lines_wr.append(f"✅ وضعیت: فعال")
                                 else:
-                                    lines_wr.append(f"❌ وضعیت: False — {false_by_wr}  |  {false_at_wr}")
-                                    if false_rsn_wr:
-                                        lines_wr.append(f"📝 علت: {false_rsn_wr}")
+                                    hist_wr = row_wr.get("false_history") or []
+                                    if isinstance(hist_wr, str):
+                                        try: hist_wr = json.loads(hist_wr)
+                                        except: hist_wr = []
+                                    if hist_wr:
+                                        lines_wr.append("❌ <b>تاریخچه False:</b>")
+                                        for i_h, h_wr in enumerate(hist_wr, 1):
+                                            h_at  = str(h_wr.get("at",""))[:16]
+                                            h_by  = h_wr.get("by","")
+                                            h_rsn = h_wr.get("reason","")
+                                            h_line = f"  {i_h}. {h_by}  |  {h_at}"
+                                            if h_rsn:
+                                                h_line += f"\n     📝 {h_rsn}"
+                                            lines_wr.append(h_line)
+                                    else:
+                                        lines_wr.append(f"❌ وضعیت: False — {false_by_wr}  |  {false_at_wr}")
+                                        if false_rsn_wr:
+                                            lines_wr.append(f"📝 علت: {false_rsn_wr}")
                                 lines_wr.append("──────────────")
                             edit_tg_keyboard(token_cbq, cbq_cid, cbq_msg_id, "\n".join(lines_wr), kb_wr_nav)
 
@@ -3351,9 +3519,24 @@ def _do_update(upd, token):
                             if is_active_ws:
                                 lines_ws.append(f"✅ وضعیت: فعال")
                             else:
-                                lines_ws.append(f"❌ وضعیت: False — {false_by_ws}  |  {false_at_ws}")
-                                if false_rsn_ws:
-                                    lines_ws.append(f"📝 علت: {false_rsn_ws}")
+                                hist_ws = row_ws.get("false_history") or []
+                                if isinstance(hist_ws, str):
+                                    try: hist_ws = json.loads(hist_ws)
+                                    except: hist_ws = []
+                                if hist_ws:
+                                    lines_ws.append("❌ <b>تاریخچه False:</b>")
+                                    for i_hw, h_ws in enumerate(hist_ws, 1):
+                                        h_at_w  = str(h_ws.get("at",""))[:16]
+                                        h_by_w  = h_ws.get("by","")
+                                        h_rsn_w = h_ws.get("reason","")
+                                        h_line_w = f"  {i_hw}. {h_by_w}  |  {h_at_w}"
+                                        if h_rsn_w:
+                                            h_line_w += f"\n     📝 {h_rsn_w}"
+                                        lines_ws.append(h_line_w)
+                                else:
+                                    lines_ws.append(f"❌ وضعیت: False — {false_by_ws}  |  {false_at_ws}")
+                                    if false_rsn_ws:
+                                        lines_ws.append(f"📝 علت: {false_rsn_ws}")
                             lines_ws.append("──────────────")
                         if len(filtered) > 10:
                             lines_ws.append(f"<i>... و {len(filtered)-10} مورد دیگر</i>")
@@ -3692,6 +3875,7 @@ def _do_update(upd, token):
                         [{"text": "✉️ پیام به گروه",      "callback_data": "admin:broadcast"}],
                         [{"text": "👥 لیست کاربران",       "callback_data": "admin:users"}],
                         [{"text": "🗑 مدیریت سیگنال‌ها",  "callback_data": "admin_sig:list:1"}],
+                        [{"text": "📋 تعیین شیفت",         "callback_data": "admin:shift:1"}],
                         [{"text": "✕ بستن",                "callback_data": "close_myalerts"}],
                     ]
                     send_tg_keyboard(token, cid,
@@ -7194,6 +7378,11 @@ def report_weekly_html():
         false_at  = row.get("false_at","")[:16] if row.get("false_at") else ""
         false_rsn = row.get("false_reason","") or ""
         is_active = row.get("is_active", True)
+        # تاریخچه کامل false
+        false_history = row.get("false_history") or []
+        if isinstance(false_history, str):
+            try: false_history = json.loads(false_history)
+            except: false_history = []
         alert     = alerts_map.get(aid, {})
         sym       = alert.get("symbol","") or row.get("symbol","") or ""
         tgt_raw   = alert.get("target_price",0) or row.get("target_price",0) or 0
@@ -7209,7 +7398,17 @@ def report_weekly_html():
         candle_cls = "candle-up" if is_buy else "candle-down"
         false_detail = ""
         if not is_active:
-            false_detail = f'<div class="false-detail"><span>🕐 {false_at}</span>{("<span class=reason>"+false_rsn+"</span>") if false_rsn else ""}</div>'
+            if false_history:
+                hist_items = ""
+                for idx_h, h in enumerate(false_history, 1):
+                    h_by  = h.get("by","")
+                    h_at  = str(h.get("at",""))[:16]
+                    h_rsn = h.get("reason","")
+                    rsn_span = f'<span class="reason">{h_rsn}</span>' if h_rsn else ""
+                    hist_items += f'<span class="hist-entry"><b>{idx_h}.</b> {h_by} — 🕐 {h_at}{(" · "+rsn_span) if rsn_span else ""}</span>'
+                false_detail = f'<div class="false-detail false-history">{hist_items}</div>'
+            else:
+                false_detail = f'<div class="false-detail"><span>🕐 {false_at}</span>{("<span class=reason>"+false_rsn+"</span>") if false_rsn else ""}</div>'
         rows_html += f"""
         <div class="card card-{status_cls}" data-search="{(assignee + ' ' + sym + ' ' + tag + ' ' + creator).lower()}">
           <div class="card-glow"></div>
@@ -7388,6 +7587,8 @@ def report_weekly_html():
   .val.highlight{{color:var(--blue);font-weight:800}}
   .false-detail{{margin-top:10px;padding:10px 14px;background:var(--red-dim);border-radius:10px;border:1px solid var(--red-border);display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;color:var(--red);font-weight:500}}
   .false-detail .reason{{font-style:italic}}
+  .false-history{{flex-direction:column;gap:4px}}
+  .hist-entry{{display:block;font-size:11px;color:var(--red);padding:2px 0}}
 
   /* ── Empty ── */
   .empty{{text-align:center;padding:90px 20px;color:var(--muted);animation:fadeUp .5s ease;position:relative;z-index:1}}
