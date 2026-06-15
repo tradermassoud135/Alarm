@@ -974,7 +974,7 @@ def _assignment_scheduler():
 
             elif event_name == "16":
                 # انتقال آلارم‌های صبح که False نخوردن به شیفت عصر
-                rows = _sb_load_pending_shifts(["morning"])
+                rows = _sb_load_pending_shifts(["morning", "morning_handover"])
                 if rows:
                     _send_handover_replies(rows, SHIFT_EVENING["members"], "انتقال از شیفت صبح")
                     threading.Thread(target=lambda: _rebuild_active_assign_count(
@@ -1030,7 +1030,7 @@ def _check_missed_shifts_on_startup():
 
     # ساعت ۱۶ تا ۲۰ — چک کن صبح‌ها انتقال پیدا کردن
     elif 16 <= h < 20:
-        rows = _sb_load_pending_shifts(["morning"])
+        rows = _sb_load_pending_shifts(["morning", "morning_handover"])
         if rows:
             print(f"[assign] startup: {len(rows)} آلارم صبح انتقال نشده — انجام میشه")
             threading.Thread(
