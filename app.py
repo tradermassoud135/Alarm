@@ -862,7 +862,11 @@ def _send_handover_replies(rows: list, target_members: list, label: str):
     for row in rows:
         aid = row.get("id")
         tag = row.get("alarm_tag", "")
+        old_assignee = row.get("assigned_to", "")
         assignee = _pick_assignee(target_members) if target_members else ""
+        # کاهش شمارش مسئول قبلی (دیگه این آلارم رو نداره)
+        if old_assignee and old_assignee in _active_assign_count:
+            _active_assign_count[old_assignee] = max(0, _active_assign_count[old_assignee] - 1)
         if assignee:
             reply_text = f"🔄 <b>{label}</b>\n\n{tag}\n👤 مسئول: <b>{assignee}</b>"
             new_shift = "morning_handover" if "morning" in label.lower() or target_members == SHIFT_MORNING["members"] else "evening_handover"
@@ -882,9 +886,12 @@ def _send_handover_replies(rows: list, target_members: list, label: str):
             except: pass
         # آپدیت shift و assignee در Supabase
         threading.Thread(
-            target=lambda a=aid, s=new_shift, asn=assignee, tg=tag: (
+            target=lambda a=aid, s=new_shift, asn=assignee, tg=tag, ft=row.get("fired_at", now_teh()): (
                 _sb_update_shift(a, s),
-                _sb_save_assignment(a, tg, asn, s, now_teh()) if asn else None
+                _sb_save_assignment(a, tg, asn, s, ft,
+                                    symbol=row.get("symbol", ""),
+                                    target_price=row.get("target_price", 0),
+                                    created_by=row.get("created_by", ""))
             ),
             daemon=True
         ).start()
