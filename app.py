@@ -869,7 +869,7 @@ def _send_handover_replies(rows: list, target_members: list, label: str):
             _active_assign_count[old_assignee] = max(0, _active_assign_count[old_assignee] - 1)
         if assignee:
             reply_text = f"🔄 <b>{label}</b>\n\n{tag}\n👤 مسئول: <b>{assignee}</b>"
-            new_shift = "morning_handover" if "morning" in label.lower() or target_members == SHIFT_MORNING["members"] else "evening_handover"
+            new_shift = "morning" if target_members == SHIFT_MORNING["members"] else "evening"
         else:
             reply_text = f"🔄 <b>{label}</b>\n\n{tag}\n⏳ تقسیم دوشنبه ۸ صبح"
             new_shift = "weekend_pending"
