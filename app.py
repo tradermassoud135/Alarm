@@ -3449,13 +3449,38 @@ def _do_update(upd, token):
                 # ── /false — آلارم منقضی/ترید شده، از لیست تریگر خارج بشه ──
                 elif txt.strip().lower() in ("/false",) or txt.strip().lower().startswith("/false"):
                     # کامنت بعد از /False — مثلاً: /False شکسته شد ناحیه
+                    # یا /False XAUUSD5 برای جستجو با هشتگ
                     false_parts = txt.strip().split(maxsplit=1)
-                    false_reason = false_parts[1].strip() if len(false_parts) > 1 else ""
+                    false_arg = false_parts[1].strip() if len(false_parts) > 1 else ""
+                    false_reason = ""
+                    false_tag_search = None
+                    # چک کن اول arg یه هشتگ/تگ نماد هست؟ (مثلاً XAUUSD5 یا #XAUUSD5)
+                    if false_arg:
+                        candidate = false_arg.upper().lstrip("#").split()[0]
+                        # اگه شبیه تگ نماد باشه (حروف + عدد، بدون فاصله)
+                        import re as _re2
+                        if _re2.match(r'^[A-Z0-9]+$', candidate) and any(c.isdigit() for c in candidate):
+                            false_tag_search = f"#{candidate}"
+                            # بقیه arg رو reason بدون
+                            rest = false_arg[len(candidate):].strip().lstrip("#").strip()
+                            false_reason = rest
+                        else:
+                            false_reason = false_arg
                     false_tag = None
                     replied = msg.get("reply_to_message", {})
                     replied_mid = replied.get("message_id")
                     target_aid_false = None
-                    if replied_mid:
+                    # ۱. جستجو با هشتگ (اگه داده شده)
+                    if false_tag_search:
+                        for aid_f, cid_map_f in _fired_msg_ids.items():
+                            if cid_map_f.get("__tag__") == false_tag_search:
+                                target_aid_false = aid_f
+                                false_tag = cid_map_f.get("__tag__", "")
+                                break
+                        if not target_aid_false:
+                            send_tg(token, cid, f"⚠️ آلارم <b>{false_tag_search}</b> پیدا نشد یا قبلاً پاک شده.\n\nشاید سرور restart شده — مستقیم روی پیام آلارم ریپلای بزن.")
+                    # ۲. جستجو با ریپلای
+                    elif replied_mid:
                         for aid_f, cid_map_f in _fired_msg_ids.items():
                             if str(cid_map_f.get(cid)) == str(replied_mid):
                                 target_aid_false = aid_f
@@ -3556,7 +3581,7 @@ def _do_update(upd, token):
                                     json={"false_broadcast_map": m}, timeout=8) if SUPABASE_KEY else None,
                                 daemon=True).start()
                     else:
-                        send_tg(token, cid, "⚠️ روی پیام آلارم ریپلای بزن و /False بنویس.")
+                        send_tg(token, cid, "⚠️ روی پیام آلارم ریپلای بزن و /False بنویس.\n\n💡 اگه آلارم قبل از restart سرور آمده، با /False XAUUSD5 (هشتگ آلارم) امتحان کن.")
 
                 # ── /check — ثبت در ژورنال روی پیام ─────────────
                 elif txt.strip().startswith("/check"):
@@ -4247,7 +4272,7 @@ def check_alerts():
             global _cache_alerts
             _cache_alerts = None
             token, cids, data = _get_token_and_cids()
-            active = [a for a in data.get("alerts", []) if a.get("active") and str(a["id"]) not in _deleted_ids]
+            active = [a for a in data.get("alerts", []) if a.get("active") and str(a["id"]) not in _deleted_ids and not a.get("fired_at")]
             if not active:
                 save_alerts(data)
                 time.sleep(60)
@@ -4309,6 +4334,7 @@ def check_alerts():
                 print(f"[check] {sym} cur={fmt_price(cur,sym)} tgt={fmt_price(tgt,sym)} cond={cond} → {'🔥 FIRE' if triggered else 'ok'}")
                 if triggered and a["id"] not in notified and str(a["id"]) not in _deleted_ids:
                     notified.add(a["id"])
+                    _deleted_ids.add(str(a["id"]))  # ← فوری blacklist — جلوگیری از double-fire
                     a["active"] = False
                     a["fired_at"] = now
                     a["fired_price"] = cur
@@ -7097,6 +7123,25 @@ _sb_load_fired_msgs()
 _sb_load_sym_counters()
 # بازسازی کامل state از Supabase بعد از هر restart
 _sb_restore_on_startup()
+
+# ── بازیابی notified set از Supabase — جلوگیری از double-fire بعد از restart ──
+def _restore_notified():
+    """آلارم‌هایی که قبلاً fire شدن رو به notified اضافه کن تا دوباره fire نشن"""
+    if not SUPABASE_KEY: return
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/alerts?status=eq.fired&select=id&limit=5000",
+            headers=_sb_h(), timeout=10)
+        if r.status_code == 200:
+            for row in r.json():
+                aid = row.get("id")
+                if aid:
+                    notified.add(str(aid))
+                    _deleted_ids.add(str(aid))
+            print(f"[STARTUP] notified بازسازی شد — {len(notified)} آلارم fired")
+    except Exception as e:
+        print(f"[STARTUP] notified restore error: {e}")
+_restore_notified()
 
 @app.route("/report/weekly")
 def report_weekly_html():
