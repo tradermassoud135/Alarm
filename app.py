@@ -692,6 +692,12 @@ _startup_handover_lock = threading.Lock()
 _false_in_progress: set = set()
 _false_in_progress_lock = threading.Lock()
 
+# ─── سیستم تأیید دریافت (Acknowledge) ───────────────────────────────
+# { alarm_id: {"assignee": "علی", "msg_map": {cid: mid}, "timer": Thread, "shift": "morning"} }
+_ack_pending: dict = {}
+_ack_pending_lock = threading.Lock()
+ACK_TIMEOUT_SEC = 600  # ۱۰ دقیقه
+
 # ─── Supabase helpers ────────────────────────────────────────────────
 
 def _sb_save_assignment(alarm_id: str, alarm_tag: str, assignee: str, shift: str, fired_at: str,
@@ -914,7 +920,168 @@ def _send_handover_replies(rows: list, target_members: list, label: str):
             ),
             daemon=True
         ).start()
+        # ارسال پیام تأیید دریافت اگه مسئول داره
+        if assignee and msg_map:
+            threading.Thread(
+                target=_send_ack_message,
+                args=(token, aid, assignee, msg_map, new_shift, 0),
+                daemon=True).start()
     print(f"[assign] {label}: {len(rows)} آلارم تقسیم شد")
+
+# ─── سیستم Acknowledge ───────────────────────────────────────────────
+
+def _get_cid_for_name(name: str) -> str:
+    """اسم عضو → chat_id — از لیست users در data"""
+    try:
+        _, _, data = _get_token_and_cids()
+        for u in data.get("users", []):
+            if u.get("custom_name", "") == name:
+                return str(u.get("chat_id", ""))
+    except: pass
+    return ""
+
+def _sb_save_ack(alarm_id: str, assignee: str, ack_status: str, reassign_count: int = 0):
+    """ذخیره وضعیت ack در Supabase"""
+    if not SUPABASE_KEY: return
+    try:
+        requests.patch(
+            f"{SUPABASE_URL}/rest/v1/alarm_assignments?id=eq.{alarm_id}",
+            headers={**_sb_h(), "Prefer": "return=minimal"},
+            json={"ack_status": ack_status, "ack_assignee": assignee,
+                  "ack_reassign_count": reassign_count,
+                  "ack_at": now_teh() if ack_status == "confirmed" else None},
+            timeout=8)
+    except Exception as e:
+        print(f"[ack] save exc: {e}")
+
+def _send_ack_message(token: str, alarm_id: str, assignee: str,
+                      msg_map: dict, shift: str, reassign_count: int = 0):
+    """
+    ارسال پیام تأیید دریافت به همه چت‌ها.
+    دکمه فقط برای مسئول قابل لمسه (بقیه پیام می‌گیرن که مجاز نیستن).
+    """
+    tag = msg_map.get("__tag__", "")
+    deadline_str = (datetime.now(TEHRAN) + timedelta(seconds=ACK_TIMEOUT_SEC)).strftime("%H:%M")
+    attempt_label = f" (تلاش {reassign_count+1})" if reassign_count > 0 else ""
+
+    ack_text = (
+        f"👆 <b>تأیید دریافت{attempt_label}</b>\n\n"
+        f"🔖 {tag}\n"
+        f"👤 مسئول: <b>{assignee}</b>\n\n"
+        f"⏳ فرصت تأیید تا ساعت <b>{deadline_str}</b>\n"
+        f"اگه تأیید نشه، آلارم به نفر دیگه‌ای منتقل میشه."
+    )
+    ack_kb = [[{"text": f"✅ دیدم — {assignee}",
+                "callback_data": f"ack:confirm:{alarm_id}:{assignee}"}]]
+
+    ack_msg_map = {}
+    for tc, tm in msg_map.items():
+        if tc in ("__tag__", "__text__"): continue
+        try:
+            r = requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": tc, "text": ack_text, "parse_mode": "HTML",
+                      "reply_to_message_id": tm,
+                      "reply_markup": {"inline_keyboard": ack_kb}},
+                timeout=8, headers=H)
+            if r.status_code == 200:
+                mid = r.json().get("result", {}).get("message_id")
+                if mid:
+                    ack_msg_map[tc] = mid
+        except: pass
+
+    with _ack_pending_lock:
+        _ack_pending[alarm_id] = {
+            "assignee": assignee, "msg_map": msg_map,
+            "ack_msg_map": ack_msg_map, "shift": shift,
+            "reassign_count": reassign_count
+        }
+
+    # ذخیره در Supabase
+    threading.Thread(target=_sb_save_ack, args=(alarm_id, assignee, "pending", reassign_count),
+                     daemon=True).start()
+
+    # شروع timer
+    t = threading.Timer(ACK_TIMEOUT_SEC, _ack_timeout, args=(alarm_id,))
+    t.daemon = True
+    t.start()
+    with _ack_pending_lock:
+        if alarm_id in _ack_pending:
+            _ack_pending[alarm_id]["timer"] = t
+
+    print(f"[ack] ارسال شد — {alarm_id} → {assignee} (تلاش {reassign_count+1})")
+
+def _ack_timeout(alarm_id: str):
+    """بعد از ۱۰ دقیقه اگه تأیید نشد → reassign"""
+    with _ack_pending_lock:
+        entry = _ack_pending.get(alarm_id)
+        if not entry:
+            return  # قبلاً confirm شده
+        old_assignee = entry["assignee"]
+        shift = entry["shift"]
+        msg_map = entry["msg_map"]
+        ack_msg_map = entry["ack_msg_map"]
+        reassign_count = entry.get("reassign_count", 0)
+
+    print(f"[ack] timeout — {alarm_id} ({old_assignee}) reassign میشه")
+
+    # ویرایش پیام ack قدیمی → منقضی شد
+    token, _, _ = _get_token_and_cids()
+    tag = msg_map.get("__tag__", "")
+    expired_text = (
+        f"⏰ <b>زمان تأیید تمام شد</b>\n\n"
+        f"🔖 {tag}\n"
+        f"👤 {old_assignee} تأیید نکرد — در حال انتقال..."
+    )
+    for tc, tm in ack_msg_map.items():
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{token}/editMessageText",
+                json={"chat_id": tc, "message_id": tm, "text": expired_text,
+                      "parse_mode": "HTML", "reply_markup": {"inline_keyboard": []}},
+                timeout=8, headers=H)
+        except: pass
+
+    # کاهش شمارش مسئول قدیمی
+    with _ack_pending_lock:
+        _ack_pending.pop(alarm_id, None)
+    if old_assignee in _active_assign_count:
+        _active_assign_count[old_assignee] = max(0, _active_assign_count[old_assignee] - 1)
+
+    # انتخاب مسئول جدید (غیر از قبلی)
+    members = _get_shift_members(shift)
+    candidates = [m for m in members if m != old_assignee]
+    if not candidates:
+        candidates = members  # اگه فقط یه نفر بود همونو بده
+    new_assignee = _pick_assignee(candidates) if candidates else ""
+
+    if new_assignee:
+        # آپدیت Supabase
+        threading.Thread(target=_sb_handover_assignment,
+                         args=(alarm_id, tag, new_assignee, shift), daemon=True).start()
+        # ارسال reply جدید به گروه
+        reassign_text = (
+            f"🔀 <b>انتقال مسئولیت</b>\n\n"
+            f"🔖 {tag}\n"
+            f"👤 {old_assignee} پاسخ نداد\n"
+            f"👤 مسئول جدید: <b>{new_assignee}</b>"
+        )
+        for tc, tm in msg_map.items():
+            if tc in ("__tag__", "__text__"): continue
+            try:
+                requests.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={"chat_id": tc, "text": reassign_text,
+                          "parse_mode": "HTML", "reply_to_message_id": tm},
+                    timeout=8, headers=H)
+            except: pass
+        # ارسال پیام ack جدید
+        threading.Thread(
+            target=_send_ack_message,
+            args=(token, alarm_id, new_assignee, msg_map, shift, reassign_count + 1),
+            daemon=True).start()
+    else:
+        print(f"[ack] هیچ عضوی برای reassign نبود — {alarm_id}")
 
 # ─── Scheduler اصلی ──────────────────────────────────────────────────
 
@@ -2602,6 +2769,53 @@ def _do_update(upd, token):
                                         [[{"text": "📋 برگشت به لیست", "callback_data": f"admin:shift:{pg}"}],
                                          [{"text": "↩️ پنل ادمین",    "callback_data": "admin_sig:back"}]])
                                 threading.Thread(target=_do_reassign, daemon=True).start()
+
+                    # ─── تأیید دریافت (Acknowledge) ─────────────────────────────────
+                    elif cbq_data.startswith("ack:confirm:"):
+                        parts_ack = cbq_data.split(":")
+                        # ack:confirm:{alarm_id}:{assignee}
+                        ack_aid      = parts_ack[2] if len(parts_ack) > 2 else ""
+                        ack_assignee = parts_ack[3] if len(parts_ack) > 3 else ""
+
+                        # هر کسی می‌تونه تأیید کنه — اسمش نوشته میشه
+                        clicker_name = _get_user_custom_name(cbq_cid) or str(cbq_cid)
+                        answer_callback(token_cbq, cbq_id, "✅ تأیید شد!")
+
+                        with _ack_pending_lock:
+                            entry_ack = _ack_pending.pop(ack_aid, None)
+
+                        if entry_ack:
+                            # لغو timer
+                            t_ack = entry_ack.get("timer")
+                            if t_ack:
+                                t_ack.cancel()
+
+                            # ویرایش پیام ack → تأیید شد
+                            tag_ack = entry_ack["msg_map"].get("__tag__", "")
+                            assignee_label = entry_ack.get("assignee", "")
+                            confirmed_text = (
+                                f"✅ <b>دریافت تأیید شد</b>\n\n"
+                                f"🔖 {tag_ack}\n"
+                                f"👤 تأییدکننده: <b>{clicker_name}</b>\n"
+                                f"👤 مسئول اصلی: {assignee_label}\n"
+                                f"🕐 {now_pretty()}"
+                            )
+                            for tc_a, tm_a in entry_ack.get("ack_msg_map", {}).items():
+                                try:
+                                    requests.post(
+                                        f"https://api.telegram.org/bot{token_cbq}/editMessageText",
+                                        json={"chat_id": tc_a, "message_id": tm_a,
+                                              "text": confirmed_text, "parse_mode": "HTML",
+                                              "reply_markup": {"inline_keyboard": []}},
+                                        timeout=8, headers=H)
+                                except: pass
+
+                            # ذخیره در Supabase — ack_assignee = کسی که واقعاً زد
+                            threading.Thread(
+                                target=_sb_save_ack,
+                                args=(ack_aid, clicker_name, "confirmed",
+                                      entry_ack.get("reassign_count", 0)),
+                                daemon=True).start()
 
                     elif cbq_data.startswith("clean_chat:"):
                         answer_callback(token_cbq, cbq_id, "🧹 در حال پاک‌سازی...")
@@ -4640,6 +4854,12 @@ def check_alerts():
                         a["tag"] = alarm_num_tag
                         # فوری توی Supabase آپدیت کن
                         save_alert_fired(a)
+                        # ارسال پیام تأیید دریافت اگه مسئول تعیین شده
+                        if _assignee and fired_cid_to_mid:
+                            threading.Thread(
+                                target=_send_ack_message,
+                                args=(token, a["id"], _assignee, fired_cid_to_mid, _shift, 0),
+                                daemon=True).start()
             if fired:
                 arch = data.get("archive", [])
                 for fid in fired:
