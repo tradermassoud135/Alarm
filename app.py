@@ -3713,107 +3713,109 @@ def _do_update(upd, token):
 
                         # جلوگیری از race condition — اگه الان داره false میشه، ignore کن
                         with _false_in_progress_lock:
-                            if target_aid_false in _false_in_progress:
-                                send_tg(token, cid, "⏳ این آلارم الان داره پردازش میشه، چند ثانیه صبر کن.")
-                                continue
-                            _false_in_progress.add(target_aid_false)
+                            _fp_busy = target_aid_false in _false_in_progress
+                            if not _fp_busy:
+                                _false_in_progress.add(target_aid_false)
 
-                        try:
-                            # چک کن این آلارم قبلاً false شده یا نه (sync — قبل از ارسال پیام)
-                            already_false = False
-                            if SUPABASE_KEY:
-                                try:
-                                    r_chk = requests.get(
-                                        f"{SUPABASE_URL}/rest/v1/alarm_assignments?id=eq.{target_aid_false}&select=is_active",
-                                        headers=_sb_h(), timeout=8)
-                                    if r_chk.status_code == 200:
-                                        chk_rows = r_chk.json()
-                                        if chk_rows:
-                                            already_false = (chk_rows[0].get("is_active") == False)
-                                except Exception as e:
-                                    print(f"[false] check exc: {e}")
-
-                            threading.Thread(
-                                target=_sb_false_assignment,
-                                args=(target_aid_false, sender_name_false, false_reason),
-                                daemon=True).start()
-                            threading.Thread(target=lambda: _rebuild_active_assign_count(
-                                _sb_load_active_assignments()), daemon=True).start()
-                            tag_txt = f" <b>{false_tag}</b>" if false_tag else ""
-                            reason_line = f"\n📝 علت: {false_reason}" if false_reason else ""
-                            now_label = now_pretty()
-
-                            false_cid_map = _fired_msg_ids.get(target_aid_false, {})
-                            prev_broadcast_map = _false_broadcast_ids.get(target_aid_false, {})
-                            if not prev_broadcast_map and already_false and SUPABASE_KEY:
-                                try:
-                                    r_bm = requests.get(
-                                        f"{SUPABASE_URL}/rest/v1/alarm_assignments?id=eq.{target_aid_false}&select=false_broadcast_map",
-                                        headers=_sb_h(), timeout=8)
-                                    if r_bm.status_code == 200:
-                                        bm_rows = r_bm.json()
-                                        if bm_rows and bm_rows[0].get("false_broadcast_map"):
-                                            prev_broadcast_map = bm_rows[0]["false_broadcast_map"]
-                                            if isinstance(prev_broadcast_map, str):
-                                                prev_broadcast_map = json.loads(prev_broadcast_map)
-                                except Exception as e:
-                                    print(f"[false] load broadcast_map exc: {e}")
-                            new_broadcast_map = {}
-
-                            if already_false and prev_broadcast_map:
-                                # ── آپدیت — ریپلای روی پیام False قبلی، متن قبلی حذف نمیشه
-                                update_msg = (
-                                    f"🔄 <b>آپدیت</b> — {now_label}\n"
-                                    f"👤 توسط: <b>{sender_name_false}</b>"
-                                    f"{reason_line}"
-                                )
-                                for tc, tm in false_cid_map.items():
-                                    if tc in ("__tag__", "__text__"): continue
-                                    reply_target = prev_broadcast_map.get(tc, tm)
+                        if _fp_busy:
+                            send_tg(token, cid, "⏳ این آلارم الان داره پردازش میشه، چند ثانیه صبر کن.")
+                        else:
+                            try:
+                                # چک کن این آلارم قبلاً false شده یا نه (sync — قبل از ارسال پیام)
+                                already_false = False
+                                if SUPABASE_KEY:
                                     try:
-                                        r_send = requests.post(
-                                            f"https://api.telegram.org/bot{token}/sendMessage",
-                                            json={"chat_id": tc, "text": update_msg,
-                                                  "parse_mode": "HTML", "reply_to_message_id": reply_target},
-                                            timeout=8, headers=H)
-                                        if r_send.status_code == 200:
-                                            new_mid = r_send.json().get("result", {}).get("message_id")
-                                            if new_mid:
-                                                new_broadcast_map[tc] = new_mid
-                                    except: pass
-                            else:
-                                # ── اولین بار false میشه
-                                false_broadcast = (
-                                    f"❌ آلارم{tag_txt} از لیست تریگر خارج شد\n"
-                                    f"👤 توسط: <b>{sender_name_false}</b>"
-                                    f"{reason_line}"
-                                )
-                                for tc, tm in false_cid_map.items():
-                                    if tc in ("__tag__", "__text__"): continue
-                                    try:
-                                        r_send = requests.post(
-                                            f"https://api.telegram.org/bot{token}/sendMessage",
-                                            json={"chat_id": tc, "text": false_broadcast,
-                                                  "parse_mode": "HTML", "reply_to_message_id": tm},
-                                            timeout=8, headers=H)
-                                        if r_send.status_code == 200:
-                                            new_mid = r_send.json().get("result", {}).get("message_id")
-                                            if new_mid:
-                                                new_broadcast_map[tc] = new_mid
-                                    except: pass
+                                        r_chk = requests.get(
+                                            f"{SUPABASE_URL}/rest/v1/alarm_assignments?id=eq.{target_aid_false}&select=is_active",
+                                            headers=_sb_h(), timeout=8)
+                                        if r_chk.status_code == 200:
+                                            chk_rows = r_chk.json()
+                                            if chk_rows:
+                                                already_false = (chk_rows[0].get("is_active") == False)
+                                    except Exception as e:
+                                        print(f"[false] check exc: {e}")
 
-                            if new_broadcast_map:
-                                _false_broadcast_ids[target_aid_false] = new_broadcast_map
                                 threading.Thread(
-                                    target=lambda aid=target_aid_false, m=new_broadcast_map: requests.patch(
-                                        f"{SUPABASE_URL}/rest/v1/alarm_assignments?id=eq.{aid}",
-                                        headers={**_sb_h(), "Prefer": "return=minimal"},
-                                        json={"false_broadcast_map": m}, timeout=8) if SUPABASE_KEY else None,
+                                    target=_sb_false_assignment,
+                                    args=(target_aid_false, sender_name_false, false_reason),
                                     daemon=True).start()
-                        finally:
-                            # همیشه lock رو آزاد کن
-                            with _false_in_progress_lock:
-                                _false_in_progress.discard(target_aid_false)
+                                threading.Thread(target=lambda: _rebuild_active_assign_count(
+                                    _sb_load_active_assignments()), daemon=True).start()
+                                tag_txt = f" <b>{false_tag}</b>" if false_tag else ""
+                                reason_line = f"\n📝 علت: {false_reason}" if false_reason else ""
+                                now_label = now_pretty()
+
+                                false_cid_map = _fired_msg_ids.get(target_aid_false, {})
+                                prev_broadcast_map = _false_broadcast_ids.get(target_aid_false, {})
+                                if not prev_broadcast_map and already_false and SUPABASE_KEY:
+                                    try:
+                                        r_bm = requests.get(
+                                            f"{SUPABASE_URL}/rest/v1/alarm_assignments?id=eq.{target_aid_false}&select=false_broadcast_map",
+                                            headers=_sb_h(), timeout=8)
+                                        if r_bm.status_code == 200:
+                                            bm_rows = r_bm.json()
+                                            if bm_rows and bm_rows[0].get("false_broadcast_map"):
+                                                prev_broadcast_map = bm_rows[0]["false_broadcast_map"]
+                                                if isinstance(prev_broadcast_map, str):
+                                                    prev_broadcast_map = json.loads(prev_broadcast_map)
+                                    except Exception as e:
+                                        print(f"[false] load broadcast_map exc: {e}")
+                                new_broadcast_map = {}
+
+                                if already_false and prev_broadcast_map:
+                                    # ── آپدیت — ریپلای روی پیام False قبلی، متن قبلی حذف نمیشه
+                                    update_msg = (
+                                        f"🔄 <b>آپدیت</b> — {now_label}\n"
+                                        f"👤 توسط: <b>{sender_name_false}</b>"
+                                        f"{reason_line}"
+                                    )
+                                    for tc, tm in false_cid_map.items():
+                                        if tc in ("__tag__", "__text__"): continue
+                                        reply_target = prev_broadcast_map.get(tc, tm)
+                                        try:
+                                            r_send = requests.post(
+                                                f"https://api.telegram.org/bot{token}/sendMessage",
+                                                json={"chat_id": tc, "text": update_msg,
+                                                      "parse_mode": "HTML", "reply_to_message_id": reply_target},
+                                                timeout=8, headers=H)
+                                            if r_send.status_code == 200:
+                                                new_mid = r_send.json().get("result", {}).get("message_id")
+                                                if new_mid:
+                                                    new_broadcast_map[tc] = new_mid
+                                        except: pass
+                                else:
+                                    # ── اولین بار false میشه
+                                    false_broadcast = (
+                                        f"❌ آلارم{tag_txt} از لیست تریگر خارج شد\n"
+                                        f"👤 توسط: <b>{sender_name_false}</b>"
+                                        f"{reason_line}"
+                                    )
+                                    for tc, tm in false_cid_map.items():
+                                        if tc in ("__tag__", "__text__"): continue
+                                        try:
+                                            r_send = requests.post(
+                                                f"https://api.telegram.org/bot{token}/sendMessage",
+                                                json={"chat_id": tc, "text": false_broadcast,
+                                                      "parse_mode": "HTML", "reply_to_message_id": tm},
+                                                timeout=8, headers=H)
+                                            if r_send.status_code == 200:
+                                                new_mid = r_send.json().get("result", {}).get("message_id")
+                                                if new_mid:
+                                                    new_broadcast_map[tc] = new_mid
+                                        except: pass
+
+                                if new_broadcast_map:
+                                    _false_broadcast_ids[target_aid_false] = new_broadcast_map
+                                    threading.Thread(
+                                        target=lambda aid=target_aid_false, m=new_broadcast_map: requests.patch(
+                                            f"{SUPABASE_URL}/rest/v1/alarm_assignments?id=eq.{aid}",
+                                            headers={**_sb_h(), "Prefer": "return=minimal"},
+                                            json={"false_broadcast_map": m}, timeout=8) if SUPABASE_KEY else None,
+                                        daemon=True).start()
+                            finally:
+                                # همیشه lock رو آزاد کن
+                                with _false_in_progress_lock:
+                                    _false_in_progress.discard(target_aid_false)
                     else:
                         send_tg(token, cid, "⚠️ روی پیام آلارم ریپلای بزن و /False بنویس.\n\n💡 اگه آلارم قبل از restart سرور آمده، با /False XAUUSD5 (هشتگ آلارم) امتحان کن.")
 
