@@ -641,7 +641,7 @@ def _make_alarm_tag(sym: str) -> str:
 
 SHIFT_MORNING = {
     "start": 8, "end": 16,
-    "members": ["اتابک", "مهران", "حمید"]
+   "members": ["اتابک", "مهران"]
 }
 SHIFT_EVENING = {
     "start": 16, "end": 20,
