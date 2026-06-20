@@ -7415,6 +7415,7 @@ def report_weekly_html():
     alerts_map = {str(a["id"]): a for a in all_alerts}
     rows = [r for r in rows if not alerts_map.get(str(r.get("id","")), {}).get("is_private")]
     rows_html = ""
+    false_by_set = set()
     for row in rows:
         aid       = str(row.get("id",""))
         tag       = row.get("alarm_tag","—")
@@ -7424,6 +7425,8 @@ def report_weekly_html():
         false_at  = row.get("false_at","")[:16] if row.get("false_at") else ""
         false_rsn = row.get("false_reason","") or ""
         is_active = row.get("is_active", True)
+        if false_by:
+            false_by_set.add(false_by)
         # تاریخچه کامل false
         false_history = row.get("false_history") or []
         if isinstance(false_history, str):
@@ -7456,7 +7459,7 @@ def report_weekly_html():
             else:
                 false_detail = f'<div class="false-detail"><span>🕐 {false_at}</span>{("<span class=reason>"+false_rsn+"</span>") if false_rsn else ""}</div>'
         rows_html += f"""
-        <div class="card card-{status_cls}" data-search="{(assignee + ' ' + sym + ' ' + tag + ' ' + creator).lower()}">
+        <div class="card card-{status_cls}" data-search="{(assignee + ' ' + sym + ' ' + tag + ' ' + creator + ' ' + false_by).lower()}" data-falseby="{false_by.lower()}" data-status="{status_cls}">
           <div class="card-glow"></div>
           <div class="card-header">
             <div class="card-icon">{direction_icon}</div>
@@ -7492,6 +7495,9 @@ def report_weekly_html():
           </div>
         </div>"""
 
+    false_by_options = "".join(
+        f'<option value="by:{name.lower()}">👤 {name}</option>' for name in sorted(false_by_set)
+    )
     active_count = sum(1 for r in rows if r.get("is_active"))
     false_count  = len(rows) - active_count
     html = f"""<!DOCTYPE html>
@@ -7580,6 +7586,10 @@ def report_weekly_html():
     direction:rtl;outline:none;transition:.25s}}
   .search-input:focus{{border-color:var(--blue);box-shadow:0 0 0 3px var(--blue-glow)}}
   .search-input::placeholder{{color:var(--muted)}}
+  .search-select{{width:100%;margin-top:10px;padding:13px 18px;border-radius:14px;border:1px solid var(--border2);
+    background:var(--surface);color:var(--text);font-size:13px;font-family:'Inter',Tahoma,sans-serif;
+    direction:rtl;outline:none;transition:.25s;cursor:pointer}}
+  .search-select:focus{{border-color:var(--blue);box-shadow:0 0 0 3px var(--blue-glow)}}
   .search-count{{display:block;text-align:center;font-size:11px;color:var(--muted);margin-top:8px}}
 
   /* ── Cards ── */
@@ -7672,6 +7682,16 @@ def report_weekly_html():
 </div>
 <div class="search-wrap">
   <input type="text" id="searchBox" class="search-input" placeholder="🔍 جستجو بر اساس مسئول، نماد، تگ یا سازنده..." oninput="filterCards()">
+  <select id="filterSelect" class="search-select" onchange="filterCards()">
+    <option value="">📂 همه آلارم‌ها</option>
+    <optgroup label="وضعیت">
+      <option value="status:active">✅ فقط فعال</option>
+      <option value="status:false">❌ فقط False شده</option>
+    </optgroup>
+    <optgroup label="False شده توسط">
+      {false_by_options}
+    </optgroup>
+  </select>
   <span class="search-count" id="searchCount"></span>
 </div>
 <div class="list" id="cardList">
@@ -7694,15 +7714,23 @@ def report_weekly_html():
   // search/filter
   function filterCards() {{
     const q = document.getElementById('searchBox').value.trim().toLowerCase();
+    const sel = document.getElementById('filterSelect').value;
     const cards = document.querySelectorAll('#cardList .card');
     let visible = 0;
     cards.forEach(c => {{
-      const match = !q || (c.dataset.search || '').includes(q);
+      let match = !q || (c.dataset.search || '').includes(q);
+      if (match && sel) {{
+        if (sel.startsWith('status:')) {{
+          match = c.dataset.status === sel.slice(7);
+        }} else if (sel.startsWith('by:')) {{
+          match = c.dataset.falseby === sel.slice(3);
+        }}
+      }}
       c.style.display = match ? '' : 'none';
       if (match) visible++;
     }});
-    document.getElementById('noResults').style.display = (q && visible === 0) ? '' : 'none';
-    document.getElementById('searchCount').textContent = q ? `${{visible}} نتیجه پیدا شد` : '';
+    document.getElementById('noResults').style.display = (visible === 0) ? '' : 'none';
+    document.getElementById('searchCount').textContent = (q || sel) ? `${{visible}} نتیجه پیدا شد` : '';
   }}
   // theme toggle with localStorage
   function toggleTheme() {{
