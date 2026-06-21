@@ -307,6 +307,16 @@ select option{background:var(--bg3)}
 .sig-dir-btn:not(.active) { color:var(--text3); }
 .sig-dir-btn:not(.active):hover { border-color:var(--text3); background:var(--bg3); }
 
+.sig-type-toggle { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.sig-type-btn {
+  display:flex; align-items:center; justify-content:center;
+  padding:10px 6px; border-radius:10px; border:2px solid var(--border);
+  background:var(--bg4); cursor:pointer; transition:all .2s; font-family:inherit;
+  font-size:11px; font-family:var(--mono); font-weight:700; letter-spacing:.05em; color:var(--text3);
+}
+.sig-type-btn.active { border-color:var(--blue); background:var(--bluedim); color:var(--blue); }
+.sig-type-btn:not(.active):hover { border-color:var(--text3); background:var(--bg3); }
+
 /* پیش‌نمایش */
 .sig-preview-wrap {
   margin: 1rem 0;
@@ -622,16 +632,24 @@ select option{background:var(--bg3)}
           <div class="sig-field">
             <label class="sig-label">جهت</label>
             <div class="sig-dir-toggle">
-              <button type="button" class="sig-dir-btn sig-buy active" id="sig-dir-buy" onclick="setSigDir('BUY')">
+              <button type="button" class="sig-dir-btn sig-buy active" id="sig-dir-buy" onclick="setSigDir('buy')">
                 <span class="sig-dir-arrow">↑</span>
                 <span class="sig-dir-txt">BUY</span>
               </button>
-              <button type="button" class="sig-dir-btn sig-sell" id="sig-dir-sell" onclick="setSigDir('SELL')">
+              <button type="button" class="sig-dir-btn sig-sell" id="sig-dir-sell" onclick="setSigDir('sell')">
                 <span class="sig-dir-arrow">↓</span>
                 <span class="sig-dir-txt">SELL</span>
               </button>
             </div>
-            <input type="hidden" id="sig-dir" value="BUY">
+            <input type="hidden" id="sig-dir" value="buy">
+          </div>
+          <div class="sig-field">
+            <label class="sig-label">نوع سفارش <span style="font-size:10px;color:var(--text3)">(Pending)</span></label>
+            <div class="sig-type-toggle">
+              <button type="button" class="sig-type-btn active" id="sig-type-limit" onclick="setSigType('limit')">Limit</button>
+              <button type="button" class="sig-type-btn" id="sig-type-stop" onclick="setSigType('stop')">Stop</button>
+            </div>
+            <input type="hidden" id="sig-type" value="limit">
           </div>
           <!-- ردیف ۲ -->
           <div class="sig-field">
@@ -649,6 +667,10 @@ select option{background:var(--bg3)}
           <div class="sig-field">
             <label class="sig-label">هدف دوم <span style="font-size:10px;color:var(--green);opacity:.7">(TP2 — اختیاری)</span></label>
             <input type="number" id="sig-tp2" placeholder="0.00000" step="any" dir="ltr" oninput="buildSignalPreview()">
+          </div>
+          <div class="sig-field">
+            <label class="sig-label">هدف سوم <span style="font-size:10px;color:var(--green);opacity:.7">(TP3 — اختیاری)</span></label>
+            <input type="number" id="sig-tp3" placeholder="0.00000" step="any" dir="ltr" oninput="buildSignalPreview()">
           </div>
           <div class="sig-field sig-field-full">
             <label class="sig-label">توضیحات <span style="font-size:10px;color:var(--text3)">(اختیاری)</span></label>
@@ -1182,14 +1204,33 @@ async function loadAlerts() {
 
 
 // ===================== SIGNALS JS =====================
-let sigDir = 'BUY';
+let sigDir  = 'buy';    // 'buy' | 'sell'
+let sigType = 'limit';  // 'limit' | 'stop'
 let signalsData = [];
+
+// عیناً همون نگاشتی که ربات تو app.py برای متن سیگنال استفاده می‌کنه (dir_map)
+const SIG_DIR_MAP = {
+  buy_limit:  { label: '✅ Buy limit',  cls: 'buy'  },
+  buy_stop:   { label: '✅ Buy stop',   cls: 'buy'  },
+  sell_limit: { label: '🔴 Sell limit', cls: 'sell' },
+  sell_stop:  { label: '🔴 Sell stop',  cls: 'sell' },
+};
+
+function getSigDirection() { return `${sigDir}_${sigType}`; }
 
 function setSigDir(dir) {
   sigDir = dir;
   document.getElementById('sig-dir').value = dir;
-  document.getElementById('sig-dir-buy').classList.toggle('active', dir === 'BUY');
-  document.getElementById('sig-dir-sell').classList.toggle('active', dir === 'SELL');
+  document.getElementById('sig-dir-buy').classList.toggle('active', dir === 'buy');
+  document.getElementById('sig-dir-sell').classList.toggle('active', dir === 'sell');
+  buildSignalPreview();
+}
+
+function setSigType(type) {
+  sigType = type;
+  document.getElementById('sig-type').value = type;
+  document.getElementById('sig-type-limit').classList.toggle('active', type === 'limit');
+  document.getElementById('sig-type-stop').classList.toggle('active', type === 'stop');
   buildSignalPreview();
 }
 
@@ -1202,27 +1243,29 @@ function onSigMktChange() {
 }
 
 function resetSignalForm() {
-  ['sig-sym','sig-entry','sig-sl','sig-tp1','sig-tp2','sig-note'].forEach(id => {
+  ['sig-sym','sig-entry','sig-sl','sig-tp1','sig-tp2','sig-tp3','sig-note'].forEach(id => {
     document.getElementById(id).value = '';
   });
   document.getElementById('sig-mkt').value = 'forex';
   document.getElementById('sig-risk').value = 'MED';
   document.getElementById('sig-tf').value = 'H1';
-  setSigDir('BUY');
+  setSigDir('buy');
+  setSigType('limit');
   buildSignalPreview();
   toast('فرم پاک شد');
 }
 
+// ساخت کارت پیش‌نمایش — دقیقاً با همون ترتیب فیلدهایی که _build_signal_text تو ربات می‌سازه:
+// #id / #symbol / جهت / Entry / SL / TP1 / TP2 / TP3 / Timeframe
 function buildSignalPreview() {
   const sym    = (document.getElementById('sig-sym').value || '').trim().toUpperCase();
   const entry  = parseFloat(document.getElementById('sig-entry').value);
   const sl     = parseFloat(document.getElementById('sig-sl').value);
   const tp1    = parseFloat(document.getElementById('sig-tp1').value);
   const tp2    = parseFloat(document.getElementById('sig-tp2').value);
+  const tp3    = parseFloat(document.getElementById('sig-tp3').value);
   const note   = document.getElementById('sig-note').value.trim();
-  const risk   = document.getElementById('sig-risk').value;
   const tf     = document.getElementById('sig-tf').value;
-  const dir    = sigDir;
   const inner  = document.getElementById('sig-card-inner');
 
   if (!sym || !entry) {
@@ -1230,109 +1273,70 @@ function buildSignalPreview() {
     return;
   }
 
-  const isBuy = dir === 'BUY';
-  const dirLabel = isBuy ? '📈 BUY' : '📉 SELL';
-  const dirCls   = isBuy ? 'buy' : 'sell';
-  const riskMap  = { LOW: {lbl:'ریسک کم', cls:'scard-risk-low'}, MED:{lbl:'ریسک متوسط',cls:'scard-risk-med'}, HIGH:{lbl:'ریسک زیاد',cls:'scard-risk-high'} };
-  const riskObj  = riskMap[risk] || riskMap['MED'];
-  const now      = new Date().toLocaleString('fa-IR', {timeZone:'Asia/Tehran', hour:'2-digit', minute:'2-digit', month:'short', day:'numeric'});
-  const creator  = getUserName();
-
-  let rr = '';
-  if (entry && sl && tp1) {
-    const slDist = Math.abs(entry - sl);
-    const tp1Dist = Math.abs(tp1 - entry);
-    const rrVal = slDist > 0 ? (tp1Dist / slDist).toFixed(1) : '—';
-    rr = `<span class="scard-badge-meta scard-tf-badge">R:R ${rrVal}</span>`;
-  }
-
-  const tp2Row = tp2 ? `<div class="scard-price-box"><div class="scard-price-lbl">🎯 TP2</div><div class="scard-price-val tp">${fmt(tp2, sym)}</div></div>` : '';
-  const noteHtml = note ? `<div class="scard-note">💬 ${note}</div>` : '';
+  const dInfo = SIG_DIR_MAP[getSigDirection()];
+  const noteHtml = note ? `<div class="scard-note">📝 ${note}</div>` : '';
 
   inner.innerHTML = `
+    <div style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-bottom:8px">#پیش‌نمایش</div>
     <div class="scard-header">
-      <div class="scard-symbol">${sym}</div>
-      <div class="scard-dir-badge ${dirCls}">${dirLabel}</div>
+      <div class="scard-symbol">#${sym}</div>
+      <div class="scard-dir-badge ${dInfo.cls}">${dInfo.label}</div>
     </div>
-    <div class="scard-prices" style="${tp2 ? 'grid-template-columns:1fr 1fr 1fr 1fr' : ''}">
+    <div class="scard-prices" style="grid-template-columns:1fr 1fr">
       <div class="scard-price-box">
-        <div class="scard-price-lbl">⚡ Entry</div>
+        <div class="scard-price-lbl">➡️ Entry</div>
         <div class="scard-price-val entry">${fmt(entry, sym)}</div>
       </div>
       <div class="scard-price-box">
         <div class="scard-price-lbl">🛑 SL</div>
         <div class="scard-price-val sl">${sl ? fmt(sl, sym) : '—'}</div>
       </div>
+    </div>
+    <div class="scard-prices" style="grid-template-columns:1fr 1fr 1fr">
       <div class="scard-price-box">
         <div class="scard-price-lbl">🎯 TP1</div>
         <div class="scard-price-val tp">${tp1 ? fmt(tp1, sym) : '—'}</div>
       </div>
-      ${tp2Row}
+      <div class="scard-price-box">
+        <div class="scard-price-lbl">🎯 TP2</div>
+        <div class="scard-price-val tp">${tp2 ? fmt(tp2, sym) : '—'}</div>
+      </div>
+      <div class="scard-price-box">
+        <div class="scard-price-lbl">🎯 TP3</div>
+        <div class="scard-price-val tp">${tp3 ? fmt(tp3, sym) : '—'}</div>
+      </div>
     </div>
     <div class="scard-meta">
-      <span class="scard-badge-meta ${riskObj.cls}">${riskObj.lbl}</span>
-      <span class="scard-badge-meta scard-tf-badge">⏱ ${tf}</span>
-      ${rr}
+      <span class="scard-badge-meta scard-tf-badge">⏱ Timeframe: ${tf}</span>
     </div>
     ${noteHtml}
-    <div class="scard-footer">
-      <span>👤 ${creator}</span>
-      <span>${now}</span>
-    </div>
   `;
 }
 
+// متن خام برای کپی — عیناً ساختار _build_signal_text پایتون (بدون تگ‌های HTML تلگرام)
 function buildSignalText() {
   const sym   = (document.getElementById('sig-sym').value || '').trim().toUpperCase();
   const entry = parseFloat(document.getElementById('sig-entry').value);
   const sl    = parseFloat(document.getElementById('sig-sl').value);
   const tp1   = parseFloat(document.getElementById('sig-tp1').value);
   const tp2   = parseFloat(document.getElementById('sig-tp2').value);
+  const tp3   = parseFloat(document.getElementById('sig-tp3').value);
   const note  = document.getElementById('sig-note').value.trim();
-  const risk  = document.getElementById('sig-risk').value;
   const tf    = document.getElementById('sig-tf').value;
-  const dir   = sigDir;
-  const creator = getUserName();
-  const now   = new Date().toLocaleString('fa-IR', {timeZone:'Asia/Tehran'});
-  const riskMap = { LOW:'🟢 کم', MED:'🟡 متوسط', HIGH:'🔴 زیاد' };
+  const dInfo = SIG_DIR_MAP[getSigDirection()];
+  const c = (v) => v ? fmt(v, sym) : '-';
 
-  let rr = '';
-  if (entry && sl && tp1) {
-    const slDist = Math.abs(entry - sl);
-    const tp1Dist = Math.abs(tp1 - entry);
-    if (slDist > 0) rr = `
-📐 R:R — ${(tp1Dist/slDist).toFixed(1)}`;
-  }
-
-  let txt = `📡 سیگنال معاملاتی
-`;
-  txt += `━━━━━━━━━━━━━━━━━━
-`;
-  txt += `💹 ${sym}  ${dir === 'BUY' ? '📈 BUY' : '📉 SELL'}
-`;
-  txt += `━━━━━━━━━━━━━━━━━━
-`;
-  txt += `⚡ ورود:  ${entry ? fmt(entry,sym) : '—'}
-`;
-  txt += `🛑 حد ضرر:  ${sl ? fmt(sl,sym) : '—'}
-`;
-  txt += `🎯 هدف ۱:  ${tp1 ? fmt(tp1,sym) : '—'}
-`;
-  if (tp2) txt += `🎯 هدف ۲:  ${fmt(tp2,sym)}
-`;
-  txt += `━━━━━━━━━━━━━━━━━━
-`;
-  txt += `⏱ تایم‌فریم:  ${tf}
-`;
-  txt += `⚠️ ریسک:  ${riskMap[risk]||'—'}`;
-  txt += rr;
-  if (note) txt += `
-
-💬 ${note}`;
-  txt += `
-━━━━━━━━━━━━━━━━━━
-`;
-  txt += `👤 ${creator}  |  🕐 ${now}`;
+  let txt = `#پیش‌نمایش\n`;
+  txt += `#${sym}\n`;
+  txt += `${dInfo.label}\n`;
+  txt += `➡️ Entry: ${c(entry)}\n`;
+  txt += `🛑 SL: ${c(sl)}\n`;
+  txt += `🎯 TP:\n`;
+  txt += `TP1: ${c(tp1)}\n`;
+  txt += `TP2: ${c(tp2)}\n`;
+  txt += `TP3: ${c(tp3)}\n`;
+  txt += `⏱ Timeframe: ${tf}`;
+  if (note) txt += `\n\n📝 ${note}`;
   return txt;
 }
 
@@ -1354,6 +1358,22 @@ function copySignalText() {
   });
 }
 
+// پیلود ارسالی به سرور — دقیقاً فیلدهایی که _build_signal_record تو app.py انتظار داره
+function buildSignalPayload() {
+  return {
+    symbol:    (document.getElementById('sig-sym').value || '').trim().toUpperCase(),
+    direction: getSigDirection(),
+    entry:     parseFloat(document.getElementById('sig-entry').value),
+    sl:        parseFloat(document.getElementById('sig-sl').value)  || null,
+    tp1:       parseFloat(document.getElementById('sig-tp1').value) || null,
+    tp2:       parseFloat(document.getElementById('sig-tp2').value) || null,
+    tp3:       parseFloat(document.getElementById('sig-tp3').value) || null,
+    tf:        document.getElementById('sig-tf').value,
+    note:      document.getElementById('sig-note').value.trim(),
+    creator:   getUserName()
+  };
+}
+
 async function sendSignalToChannel() {
   const sym = (document.getElementById('sig-sym').value||'').trim().toUpperCase();
   if (!sym) { toast('نماد را وارد کنید'); return; }
@@ -1365,16 +1385,17 @@ async function sendSignalToChannel() {
   btn.innerHTML = '<span class="sig-btn-ico">⏳</span> در حال ارسال...';
   btn.disabled = true;
 
-  const txt = buildSignalText();
   try {
     const r = await fetch(`${API}/api/send-signal`, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ text: txt, sym, dir: sigDir })
+      body: JSON.stringify(buildSignalPayload())
     });
     const d = await r.json();
-    if (d.ok) toast(`✅ سیگنال به ${d.sent || '?'} نفر ارسال شد`);
-    else toast(`❌ خطا: ${d.error || 'ارسال ناموفق'}`);
+    if (d.ok) {
+      toast(d.sent ? `✅ سیگنال ${d.signal.id} به کانال ارسال شد` : `⚠️ ${d.warning || 'فقط ذخیره شد'}`);
+      loadSignals();
+    } else toast(`❌ خطا: ${d.error || 'ارسال ناموفق'}`);
   } catch { toast('❌ خطا در ارتباط با سرور'); }
   btn.innerHTML = orig; btn.disabled = false;
 }
@@ -1390,30 +1411,15 @@ async function saveSignalToDB() {
   btn.innerHTML = '<span class="sig-btn-ico">⏳</span> در حال ثبت...';
   btn.disabled = true;
 
-  const payload = {
-    symbol:    sym,
-    type:      document.getElementById('sig-mkt').value,
-    direction: sigDir,
-    entry:     entry,
-    sl:        parseFloat(document.getElementById('sig-sl').value) || null,
-    tp1:       parseFloat(document.getElementById('sig-tp1').value) || null,
-    tp2:       parseFloat(document.getElementById('sig-tp2').value) || null,
-    note:      document.getElementById('sig-note').value.trim(),
-    risk:      document.getElementById('sig-risk').value,
-    tf:        document.getElementById('sig-tf').value,
-    creator:   getUserName(),
-    created_at: new Date().toISOString()
-  };
-
   try {
     const r = await fetch(`${API}/api/signals`, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify(payload)
+      body: JSON.stringify(buildSignalPayload())
     });
     const d = await r.json();
     if (d.ok) {
-      toast('💾 سیگنال ثبت شد');
+      toast(`💾 سیگنال ${d.signal.id} ثبت شد`);
       loadSignals();
     } else toast(`❌ ${d.error || 'خطا در ثبت'}`);
   } catch { toast('❌ خطا در ارتباط با سرور'); }
@@ -1440,31 +1446,31 @@ function renderSignalsList(items) {
     body.innerHTML = '<div class="empty"><div class="empty-ico">📡</div><p>هنوز سیگنالی صادر نشده</p></div>';
     return;
   }
-  const riskMap = { LOW:'🟢 کم', MED:'🟡 متوسط', HIGH:'🔴 زیاد' };
   body.innerHTML = items.slice().reverse().map(s => {
-    const isBuy = s.direction === 'BUY';
-    const dirTxt = isBuy ? '▲ BUY' : '▼ SELL';
-    const ts = s.created_at ? new Date(s.created_at).toLocaleString('fa-IR',{timeZone:'Asia/Tehran',hour:'2-digit',minute:'2-digit',month:'short',day:'numeric'}) : '';
+    const dInfo = SIG_DIR_MAP[s.direction] || { label: s.direction || '—', cls: 'buy' };
+    const isBuy = dInfo.cls === 'buy';
+    const dirShort = isBuy ? '▲ BUY' : '▼ SELL';
+    const ts = s.sent_at ? new Date(String(s.sent_at).replace(' ','T')).toLocaleString('fa-IR',{timeZone:'Asia/Tehran',hour:'2-digit',minute:'2-digit',month:'short',day:'numeric'}) : '';
     const tp2 = s.tp2 ? ` | TP2: <span class="tp-price">${fmt(s.tp2,s.symbol)}</span>` : '';
-    const noteHtml = s.note ? `<div class="sig-list-note">💬 ${s.note}</div>` : '';
+    const tp3 = s.tp3 ? ` | TP3: <span class="tp-price">${fmt(s.tp3,s.symbol)}</span>` : '';
+    const noteHtml = s.note ? `<div class="sig-list-note">📝 ${s.note}</div>` : '';
     return `<div class="sig-list-item">
-      <div class="sig-list-badge ${isBuy?'buy':'sell'}">${dirTxt}</div>
+      <div class="sig-list-badge ${isBuy?'buy':'sell'}">${dirShort}</div>
       <div class="sig-list-info">
-        <div class="sig-list-sym">${s.symbol} <span style="font-size:10px;font-family:var(--mono);color:var(--text3)">${s.tf||''}</span></div>
+        <div class="sig-list-sym">#${s.id||''} &nbsp;${s.symbol} <span style="font-size:10px;font-family:var(--mono);color:var(--text3)">${s.tf||''}</span></div>
         <div class="sig-list-prices">
-          ورود: <span class="entry-price">${fmt(s.entry,s.symbol)}</span>
+          ${dInfo.label} &nbsp;|&nbsp; Entry: <span class="entry-price">${fmt(s.entry,s.symbol)}</span>
           &nbsp;|&nbsp; SL: <span class="sl-price">${s.sl?fmt(s.sl,s.symbol):'—'}</span>
-          &nbsp;|&nbsp; TP1: <span class="tp-price">${s.tp1?fmt(s.tp1,s.symbol):'—'}</span>${tp2}
+          &nbsp;|&nbsp; TP1: <span class="tp-price">${s.tp1?fmt(s.tp1,s.symbol):'—'}</span>${tp2}${tp3}
         </div>
         <div class="sig-list-meta">
-          ${s.risk ? `<span class="scard-badge-meta ${s.risk==='LOW'?'scard-risk-low':s.risk==='HIGH'?'scard-risk-high':'scard-risk-med'}" style="font-size:9px;padding:2px 8px">${riskMap[s.risk]||''}</span>` : ''}
-          <span style="font-size:10px;font-family:var(--mono);color:var(--text3)">👤 ${s.creator||'—'}</span>
+          <span style="font-size:10px;font-family:var(--mono);color:var(--text3)">👤 ${s.sent_by||'—'}</span>
         </div>
         ${noteHtml}
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
         <span class="sig-list-time">${ts}</span>
-        <button class="sig-list-del" onclick="deleteSignal('${s.id||s._id||s.created_at}')">✕</button>
+        <button class="sig-list-del" onclick="deleteSignal('${s.id}')">✕</button>
       </div>
     </div>`;
   }).join('');
