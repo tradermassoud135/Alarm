@@ -5195,6 +5195,114 @@ def test_tg():
     res = broadcast(token, cids, f"✅ تست موفق\n⏰ {now_pretty()}")
     return jsonify({"ok": any(res), "sent": sum(res), "total": len(cids)})
 
+# ===================== SIGNALS API (وب‌سایت) =====================
+SIGNAL_VALID_DIRECTIONS = {"buy_limit", "buy_stop", "sell_limit", "sell_stop"}
+
+def _sb_delete_signal(sig_id):
+    """حذف سیگنال از Supabase"""
+    if not SUPABASE_KEY: return
+    try:
+        requests.delete(
+            f"{SUPABASE_URL}/rest/v1/signals?id=eq.{sig_id}",
+            headers=_sb_h(), timeout=8)
+    except: pass
+
+def _build_signal_record(body: dict):
+    """از روی دیتای فرم سایت، رکوردی عیناً هم‌ساختار با چیزی که ربات می‌سازه برمی‌گردونه"""
+    sym = (body.get("symbol") or "").upper().strip()
+    direction = (body.get("direction") or "").lower().strip()
+    if not sym:
+        return None, "نماد وارد نشده"
+    if direction not in SIGNAL_VALID_DIRECTIONS:
+        return None, "جهت سیگنال نامعتبره (buy_limit/buy_stop/sell_limit/sell_stop)"
+    try:
+        entry = float(body.get("entry"))
+    except (TypeError, ValueError):
+        return None, "قیمت ورود الزامی است"
+
+    def _f(key):
+        v = body.get(key)
+        try:
+            return float(v) if v not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+
+    sl  = _f("sl")
+    tp1 = _f("tp1")
+    tp2 = _f("tp2")
+    tp3 = _f("tp3")
+    tf  = (body.get("tf") or SIGNAL_DEFAULT_TF).strip()
+    note = (body.get("note") or "").strip()
+    creator = (body.get("creator") or "وب‌سایت").strip()
+
+    risk_pips = round(abs(entry - sl) * get_pip_multiplier(sym), 1) if sl is not None else None
+    rr = None
+    if sl is not None and tp1 is not None and abs(entry - sl) > 0:
+        rr = round(abs(tp1 - entry) / abs(entry - sl), 2)
+
+    seq = _sb_next_signal_seq()
+    sig = {
+        "id": f"S{seq:05d}", "seq": seq, "symbol": sym, "direction": direction,
+        "entry": entry, "sl": sl, "tp1": tp1, "tp2": tp2, "tp3": tp3,
+        "tf": tf, "risk_pips": risk_pips, "rr": rr,
+        "sent_by": creator, "sent_at": now_teh(), "channel_msg_id": None,
+        "status": "active", "note": note or None,
+    }
+    return sig, None
+
+@app.route("/api/signals", methods=["GET"])
+def get_signals():
+    limit = request.args.get("limit", 50)
+    try: limit = int(limit)
+    except: limit = 50
+    return jsonify(_sb_load_signals(limit=limit))
+
+@app.route("/api/signals", methods=["POST"])
+def add_signal():
+    """ثبت سیگنال در دیتابیس — بدون ارسال به کانال تلگرام"""
+    body = request.json or {}
+    sig, err = _build_signal_record(body)
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+    _sb_save_signal(sig)
+    sig["text"] = _build_signal_text(sig)
+    return jsonify({"ok": True, "signal": sig})
+
+@app.route("/api/signals/<sig_id>", methods=["DELETE"])
+def del_signal(sig_id):
+    threading.Thread(target=_sb_delete_signal, args=(sig_id,), daemon=True).start()
+    return jsonify({"ok": True})
+
+@app.route("/api/send-signal", methods=["POST"])
+def send_signal():
+    """ثبت سیگنال + ارسال عیناً به کانال تلگرام، با همون فرمتی که ربات می‌سازه"""
+    body = request.json or {}
+    sig, err = _build_signal_record(body)
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+
+    token, _, _ = _get_token_and_cids()
+    channel_mid = None
+    if token and SIGNAL_CHANNEL:
+        try:
+            r_ch = requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": SIGNAL_CHANNEL, "text": _build_signal_text(sig), "parse_mode": "HTML"},
+                timeout=10, headers=H)
+            if r_ch.status_code == 200:
+                channel_mid = r_ch.json().get("result", {}).get("message_id")
+                sig["channel_msg_id"] = channel_mid
+        except Exception as e:
+            print(f"[signal] web channel send error: {e}")
+
+    _sb_save_signal(sig)
+    sig["text"] = _build_signal_text(sig)
+    if not SIGNAL_CHANNEL:
+        return jsonify({"ok": True, "signal": sig, "sent": 0,
+                         "warning": "کانال سیگنال (SIGNAL_CHANNEL) تنظیم نشده — فقط در دیتابیس ذخیره شد"})
+    return jsonify({"ok": True, "signal": sig, "sent": 1 if channel_mid else 0})
+# ===================================================================
+
 @app.route("/api/status")
 def status():
     alerts = load_alerts()
