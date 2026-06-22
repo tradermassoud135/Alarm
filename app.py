@@ -4594,15 +4594,16 @@ def check_alerts():
                         private_label = "\n\n🔒 <i>آلارم شخصی — فقط برای شما ارسال شده</i>" if a.get("is_private") else ""
                         alarm_num_tag = _make_alarm_tag(sym)
                         creator_tag = "#" + re.sub(r'[^\w]', '_', creator).strip('_')
-                        # ── تعیین مسئول تریگر ──────────────────────────
-                        _assignee, _shift = _get_assignee_for_alarm(
-                            a["id"], alarm_num_tag, now,
-                            symbol=sym, target_price=float(tgt), created_by=creator
-                        )
-                        if _assignee:
-                            assignee_line = f"\n\n🎯 مسئول تریگر: <b>{_assignee}</b>"
-                        else:
+                        # ── تعیین مسئول تریگر — فقط برای آلارم‌های تیمی، آلارم شخصی وارد تقسیم شیفت نمی‌شه ──
+                        if a.get("is_private"):
+                            _assignee, _shift = "", None
                             assignee_line = ""
+                        else:
+                            _assignee, _shift = _get_assignee_for_alarm(
+                                a["id"], alarm_num_tag, now,
+                                symbol=sym, target_price=float(tgt), created_by=creator
+                            )
+                            assignee_line = f"\n\n🎯 مسئول تریگر: <b>{_assignee}</b>" if _assignee else ""
                         created_at_raw = a.get("created_at", "")
                         created_label = f" | 📅 ثبت: <i>{created_at_raw[:16]}</i>" if created_at_raw else ""
                         fired_msg = (
